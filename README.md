@@ -190,38 +190,6 @@ The answer will show:
 - Which cluster node handled the request
 - Number of relevant chunks found
 
-## Project Structure
-
-```
-DocuMind/
-├── backend/
-│   ├── src/main/java/.../
-│   │   ├── actors/
-│   │   │   ├── OrchestratorActor.java      # Coordinates RAG pipeline
-│   │   │   ├── SearchWorkerActor.java      # Vector search workers
-│   │   │   ├── LLMActor.java               # OpenAI integration
-│   │   │   ├── LoggingActor.java           # Centralized logging
-│   │   │   └── ClusterClientActor.java     # REST API cluster client
-│   │   ├── services/
-│   │   │   ├── EmbeddingService.java       # Word2Vec wrapper
-│   │   │   ├── QdrantService.java          # Vector DB operations
-│   │   │   └── LLMService.java             # OpenAI API calls
-│   │   ├── controller/
-│   │   │   ├── QuestionController.java     # Query endpoint
-│   │   │   └── FileUploadController.java   # Upload endpoint
-│   │   ├── config/
-│   │   │   └── ClusterClientConfig.java    # Akka cluster setup
-│   │   ├── messages/                        # Message classes
-│   │   ├── ClusterNode.java                 # Cluster node entry point
-│   │   └── WebApplication.java              # Spring Boot entry point
-│   └── src/main/resources/
-│       ├── application.conf                 # Akka cluster config
-│       └── GoogleNews-vectors-negative300-SLIM.bin
-├── frontend/
-│   └── src/
-│       ├── App.jsx                          # DocuMind UI component
-│       └── main.jsx                         # Entry point
-└── README.md
 ```
 
 ## Akka Communication Patterns in DocuMind
@@ -299,83 +267,10 @@ set OPENAI_API_KEY=sk-...  # Windows
 export OPENAI_API_KEY=sk-...  # Linux/Mac
 ```
 
-### Word2Vec Model Not Found
-**Problem**: `FileNotFoundException: GoogleNews-vectors-negative300-SLIM.bin`
 
-**Solution**: 
-1. Download the model from https://github.com/eyaler/word2vec-slim
-2. Place it in `backend/src/main/resources/`
-3. File size should be ~1.5GB
 
-### No Orchestrators Available
-**Problem**: REST API returns "No orchestrators available"
 
-**Solution**: 
-1. Make sure both cluster nodes (2551, 2552) are running
-2. Wait 10-15 seconds for cluster formation
-3. Check logs for "Orchestrator registered with Receptionist"
-4. Restart nodes in order: 2551 first, then 2552
 
-### Frontend Can't Connect to API
-**Problem**: Frontend shows connection error
-
-**Solution**:
-1. Check Spring Boot is running on port 8080
-2. Verify in browser: http://localhost:8080/api/health
-3. Check CORS settings if accessing from different domain
-
-## API Endpoints
-
-### POST /api/ask
-Submit a question
-```bash
-curl -X POST http://localhost:8080/api/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What is an Akka actor?"}'
-```
-
-### POST /api/upload
-Upload a document
-```bash
-curl -X POST http://localhost:8080/api/upload \
-  -F "file=@lecture.pdf"
-```
-
-### GET /api/health
-Check system status
-```bash
-curl http://localhost:8080/api/health
-```
-
-### GET /api/cluster-status
-Check cluster state
-```bash
-curl http://localhost:8080/api/cluster-status
-```
-
-### GET /api/info
-Get system information
-```bash
-curl http://localhost:8080/api/info
-```
-
-## Performance Considerations
-
-DocuMind is optimized for:
-- **Chunk Size**: 5 sentences with 60% overlap balances context preservation vs storage
-- **Top-K**: Retrieves top 5 chunks - more context but slower; fewer chunks but less info
-- **Worker Count**: 4 workers per node allows parallel search while managing memory
-- **Timeout**: 60 seconds for ASK pattern handles slow OpenAI responses
-- **Memory**: Word2Vec SLIM (1.5GB) vs full model (3.5GB) - chose SLIM for 8GB RAM laptops
-
-## Limitations
-
-Current DocuMind limitations:
-- Word2Vec doesn't understand technical terms well (e.g., "CSYE 7374" has no semantic meaning)
-- Requires all nodes running for full fault tolerance (1 node = no redundancy)
-- No persistence - uploaded files lost on restart (could add Akka Persistence)
-- OpenAI API costs money - each query ~$0.002 for GPT-3.5
-- Single Qdrant instance - not distributed (could use Qdrant cluster in production)
 
 ## Future Improvements for DocuMind
 
@@ -410,7 +305,7 @@ Created by: Roshan Shetty & Rithwik
 
 Course: CSYE 7374 - AI Agent Infrastructure  
 Institution: Northeastern University  
-Semester: Fall 2024
+Semester: Fall 2025
 
 ## License
 
