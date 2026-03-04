@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- 
+    Logback Configuration for Clean CLI Output
+    Suppresses all technical logs to make the CLI user-friendly
+    -->
+    
+    <!-- Console appender - only shows WARN and above -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+            <level>WARN</level>
+        </filter>
+    </appender>
+    
+    <!-- File appender for debugging (keeps all logs) -->
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+        <file>logs/rag-system.log</file>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+    
+    <!-- Suppress noisy libraries -->
+    <logger name="akka" level="ERROR"/>
+    <logger name="akka.cluster" level="ERROR"/>
+    <logger name="akka.remote" level="ERROR"/>
+    <logger name="akka.actor" level="ERROR"/>
+    <logger name="io.netty" level="ERROR"/>
+    <logger name="io.grpc" level="ERROR"/>
+    <logger name="io.qdrant" level="ERROR"/>
+    <logger name="org.springframework" level="ERROR"/>
+    <logger name="org.nd4j" level="ERROR"/>
+    <logger name="org.deeplearning4j" level="ERROR"/>
+    <logger name="org.bytedeco" level="ERROR"/>
+    
+    <!-- Our application logs - only errors to console -->
+    <logger name="com.northeastern.csye7374.finalproject" level="ERROR"/>
+    
+    <!-- Root logger -->
+    <root level="ERROR">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>
+

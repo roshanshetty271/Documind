@@ -1,0 +1,12 @@
+# Config Directory
+#
+# This directory will contain configuration classes.
+#
+# Planned configuration:
+# - AkkaConfig: Actor system and cluster configuration
+# - QdrantConfig: Qdrant connection settings
+# - SpringAIConfig: Spring AI configuration
+# - ApplicationConfig: General application settings
+#
+# Load settings from application.conf and application.properties
+

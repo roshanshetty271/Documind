@@ -1,0 +1,121 @@
+node_modules/
+frontend/node_modules/
+target/
+logs/
+backend/logs/
+*.log
+.idea/
+*.iml
+# Java
+*.class
+*.jar
+*.war
+*.ear
+*.log
+hs_err_pid*
+replay_pid*
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE - IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# IDE - Eclipse
+.classpath
+.project
+.settings/
+bin/
+
+# IDE - VSCode
+.vscode/
+*.code-workspace
+
+# IDE - NetBeans
+nbproject/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
+
+# Akka
+akka.log
+akka-*.log
+journal/
+snapshots/
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~.nib
+.DS_Store
+Thumbs.db
+
+# Configuration with secrets (create .template versions)
+src/main/resources/application.properties
+src/main/resources/secrets.properties
+
+# Generated files
+generated-sources/
+generated-test-sources/
+
+# Spring
+spring-shell.log
+
+# Package Files
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# virtual machine crash logs
+hs_err_pid*
+replay_pid*
+
+# Test outputs
+*.test
+test-output/
+
+# Qdrant data (if running locally)
+qdrant_storage/
+
+# AI API keys and secrets
+.env
+backend/.env
+frontend/.env
+*.env
+secrets.txt
+
+# Interview prep and personal docs (DO NOT upload)
+INTERVIEW_PREP.md
+
+# Course files and uploaded documents
+backend/CourseFiles/
+CourseFiles/
+
+# Word2Vec model (too large for GitHub, ~1.5GB)
+*.bin
+backend/models/
+backend/src/main/resources/GoogleNews-vectors-negative300-SLIM.bin
+

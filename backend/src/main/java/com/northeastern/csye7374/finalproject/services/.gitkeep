@@ -1,0 +1,12 @@
+# Services Directory
+#
+# This directory will contain business logic services.
+#
+# Planned services:
+# - RagService: Orchestrates RAG pipeline (retrieve + generate)
+# - QdrantService: Wrapper around HW2 QdrantVectorDB.java
+# - EmbeddingService: Vector embedding generation (TF-IDF from HW2, or Spring AI)
+# - LLMService: Wrapper around HW3 Spring AI integration
+#
+# Services are NOT actors - they provide stateless business logic
+

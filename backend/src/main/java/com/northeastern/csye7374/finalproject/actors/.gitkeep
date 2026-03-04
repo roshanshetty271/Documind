@@ -1,0 +1,12 @@
+# Actors Directory
+# 
+# This directory will contain Akka Typed Actor implementations.
+# 
+# Planned actors:
+# - QueryActor: Handles user queries and coordinates RAG pipeline
+# - VectorStoreActor: Manages Qdrant vector database operations (from HW2)
+# - LLMActor: Handles Spring AI LLM interactions (from HW3)
+# - EmbeddingActor: Creates vector embeddings for documents
+# 
+# Reference: HW4 Part7 for actor patterns (tell/ask/forward)
+

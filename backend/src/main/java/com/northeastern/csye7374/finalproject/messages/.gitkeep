@@ -1,0 +1,12 @@
+# Messages Directory
+#
+# This directory will contain message classes for actor communication.
+#
+# Planned message types:
+# - Query messages (search requests)
+# - Vector operation messages (store, retrieve)
+# - LLM request/response messages
+# - Cluster coordination messages
+#
+# All messages should be immutable (final fields, records recommended)
+

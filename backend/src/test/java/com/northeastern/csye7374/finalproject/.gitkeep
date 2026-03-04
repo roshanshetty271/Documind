@@ -1,0 +1,12 @@
+# Test Directory
+#
+# This directory will contain test classes.
+#
+# Planned tests:
+# - Actor tests using Akka TestKit
+# - Service unit tests
+# - Integration tests for RAG pipeline
+# - Cluster behavior tests
+#
+# Reference JUnit 5 and Akka TestKit patterns
+
