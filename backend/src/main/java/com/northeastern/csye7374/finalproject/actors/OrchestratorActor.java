@@ -70,17 +70,22 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
         public final Throwable failure;               // null on success
         public final String originalQuery;
         public final ActorRef<QueryResult> replyTo;
+        public final ActorRef<SearchWorkerActor.Command> worker;
         public final String workerPath;
         public final long startTimeMs;
+        public final int attempt;
         
         public SearchCompleted(SearchResponse searchResponse, Throwable failure, String originalQuery, 
-                              ActorRef<QueryResult> replyTo, String workerPath, long startTimeMs) {
+                              ActorRef<QueryResult> replyTo, ActorRef<SearchWorkerActor.Command> worker,
+                              long startTimeMs, int attempt) {
             this.searchResponse = searchResponse;
             this.failure = failure;
             this.originalQuery = originalQuery;
             this.replyTo = replyTo;
-            this.workerPath = workerPath;
+            this.worker = worker;
+            this.workerPath = worker.path().toString();
             this.startTimeMs = startTimeMs;
+            this.attempt = attempt;
         }
     }
     
@@ -89,18 +94,25 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
         public final LLMActor.LLMResponse llmResponse;   // null when the ask failed
         public final Throwable failure;                  // null on success
         public final ActorRef<QueryResult> originalReplyTo;
+        public final String originalQuery;
+        public final List<String> chunks;
+        public final ActorRef<LLMActor.Command> llmActor;
         public final String workerPath;
-        public final int chunksFound;
         public final long startTimeMs;
+        public final int attempt;
         
         public LLMCompleted(LLMActor.LLMResponse llmResponse, Throwable failure, ActorRef<QueryResult> originalReplyTo,
-                          String workerPath, int chunksFound, long startTimeMs) {
+                          String originalQuery, List<String> chunks, ActorRef<LLMActor.Command> llmActor,
+                          String workerPath, long startTimeMs, int attempt) {
             this.llmResponse = llmResponse;
             this.failure = failure;
             this.originalReplyTo = originalReplyTo;
+            this.originalQuery = originalQuery;
+            this.chunks = chunks;
+            this.llmActor = llmActor;
             this.workerPath = workerPath;
-            this.chunksFound = chunksFound;
             this.startTimeMs = startTimeMs;
+            this.attempt = attempt;
         }
     }
     
@@ -149,8 +161,14 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
     
     private final String nodeId;
     
-    // How long a single pipeline step may take before the caller gets an error
-    private static final Duration STEP_TIMEOUT = Duration.ofSeconds(30);
+    // Per-step timeouts (documind.orchestrator.* in application.conf). A step that
+    // times out (e.g. its worker sat on a node that died) is retried once on a
+    // different worker, preferably on another node. Defaults keep the worst case
+    // (2 x search + 2 x LLM = 50s) inside the REST API's 60s ask timeout.
+    private static final Duration DEFAULT_SEARCH_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration DEFAULT_LLM_TIMEOUT = Duration.ofSeconds(20);
+    private final Duration searchTimeout;
+    private final Duration llmTimeout;
     
     // Discovered actors from all nodes
     private List<ActorRef<SearchWorkerActor.Command>> searchWorkers = new ArrayList<>();
@@ -165,6 +183,12 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
     private OrchestratorActor(ActorContext<Command> context, String nodeId) {
         super(context);
         this.nodeId = nodeId;
+        
+        com.typesafe.config.Config config = context.getSystem().settings().config();
+        this.searchTimeout = config.hasPath("documind.orchestrator.search-timeout")
+            ? config.getDuration("documind.orchestrator.search-timeout") : DEFAULT_SEARCH_TIMEOUT;
+        this.llmTimeout = config.hasPath("documind.orchestrator.llm-timeout")
+            ? config.getDuration("documind.orchestrator.llm-timeout") : DEFAULT_LLM_TIMEOUT;
         
         // Register with Receptionist
         context.getSystem().receptionist().tell(
@@ -304,35 +328,7 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
                 searchWorkers.get(searchWorkerIndex % searchWorkers.size());
             searchWorkerIndex++;
             
-            String workerPath = selectedWorker.path().toString();
-            
-            log.info("[ORCHESTRATOR] Selected worker: {}", workerPath);
-            log.info("[ORCHESTRATOR] ASK → SearchWorkerActor (per-request reply)");
-            System.out.println("[ORCHESTRATOR] ASK → SearchWorkerActor: " + workerPath);
-            
-            // Build search query
-            SearchQuery searchQuery = new SearchQuery(command.query, 5); // top-5 results
-            
-            // context.ask creates a fresh reply ref for this request only, so the
-            // response is mapped with THIS query's replyTo even when several
-            // queries are in flight (a shared messageAdapter would be replaced
-            // by the next query and cross the replies).
-            final String finalWorkerPath = workerPath;
-            final long finalStartTime = startTime;
-            getContext().ask(
-                SearchResponse.class,
-                selectedWorker,
-                STEP_TIMEOUT,
-                replyTo -> new SearchWorkerActor.SearchCommand(searchQuery, replyTo),
-                (response, failure) -> new SearchCompleted(
-                    response,
-                    failure,
-                    command.query, 
-                    command.replyTo,
-                    finalWorkerPath, 
-                    finalStartTime
-                )
-            );
+            askSearch(command.query, command.replyTo, startTime, selectedWorker, 1);
             
         } catch (Exception e) {
             log.error("[ORCHESTRATOR] Error processing query: {}", e.getMessage(), e);
@@ -342,11 +338,82 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
         return this;
     }
     
+    // ASK one search worker; the reply (or timeout) comes back as SearchCompleted
+    private void askSearch(String query, ActorRef<QueryResult> caller, long startTime,
+                           ActorRef<SearchWorkerActor.Command> worker, int attempt) {
+        log.info("[ORCHESTRATOR] Selected worker: {} (attempt {})", worker.path(), attempt);
+        log.info("[ORCHESTRATOR] ASK → SearchWorkerActor (per-request reply)");
+        System.out.println("[ORCHESTRATOR] ASK → SearchWorkerActor: " + worker.path());
+        
+        // Build search query
+        SearchQuery searchQuery = new SearchQuery(query, 5); // top-5 results
+        
+        // context.ask creates a fresh reply ref for this request only, so the
+        // response is mapped with THIS query's replyTo even when several
+        // queries are in flight (a shared messageAdapter would be replaced
+        // by the next query and cross the replies).
+        getContext().ask(
+            SearchResponse.class,
+            worker,
+            searchTimeout,
+            replyTo -> new SearchWorkerActor.SearchCommand(searchQuery, replyTo),
+            (response, failure) -> new SearchCompleted(
+                response, failure, query, caller, worker, startTime, attempt)
+        );
+    }
+    
+    // ASK one LLM actor; it replies straight to the per-request ref (FORWARD of replyTo)
+    private void askLlm(String query, List<String> chunks, ActorRef<QueryResult> caller, String workerPath,
+                        long startTime, ActorRef<LLMActor.Command> llmActor, int attempt) {
+        log.info("[ORCHESTRATOR] FORWARD → LLMActor (preserving replyTo chain)");
+        log.info("[ORCHESTRATOR] Selected LLMActor: {} (attempt {})", llmActor.path(), attempt);
+        System.out.println("[ORCHESTRATOR] FORWARD → LLMActor: " + llmActor.path());
+        System.out.println("[ORCHESTRATOR] (replyTo preserved for response routing)");
+        
+        // Pass logger to LLMActor
+        ActorRef<LoggingActor.Command> loggerForLLM = 
+            loggingActors.isEmpty() ? null : loggingActors.get(0);
+        
+        getContext().ask(
+            LLMActor.LLMResponse.class,
+            llmActor,
+            llmTimeout,
+            replyTo -> new LLMActor.GenerateAnswer(query, chunks, replyTo, loggerForLLM),
+            (response, failure) -> new LLMCompleted(
+                response, failure, caller, query, chunks, llmActor, workerPath, startTime, attempt)
+        );
+    }
+    
+    // Pick a different actor than the one that failed, preferring one on another node
+    private static <T> ActorRef<T> pickOther(List<ActorRef<T>> candidates, ActorRef<T> failed) {
+        ActorRef<T> sameNode = null;
+        for (ActorRef<T> candidate : candidates) {
+            if (candidate.equals(failed)) {
+                continue;
+            }
+            if (!candidate.path().address().equals(failed.path().address())) {
+                return candidate;
+            }
+            if (sameNode == null) {
+                sameNode = candidate;
+            }
+        }
+        return sameNode;
+    }
+    
     // Forward to LLMActor for answer generation
     private Behavior<Command> onSearchCompleted(SearchCompleted command) {
         if (command.failure != null) {
+            // Timed out (worker dead, unreachable or stuck): retry once elsewhere
             log.error("[ORCHESTRATOR] Search step failed on {}: {}", command.workerPath, command.failure.getMessage());
-            command.replyTo.tell(QueryResult.error("Search failed: " + command.failure.getMessage()));
+            ActorRef<SearchWorkerActor.Command> other =
+                command.attempt == 1 ? pickOther(searchWorkers, command.worker) : null;
+            if (other != null) {
+                System.out.println("[ORCHESTRATOR] Search timed out, retrying on another worker");
+                askSearch(command.originalQuery, command.replyTo, command.startTimeMs, other, command.attempt + 1);
+            } else {
+                command.replyTo.tell(QueryResult.error("Search failed: " + command.failure.getMessage()));
+            }
             return this;
         }
         SearchResponse searchResponse = command.searchResponse;
@@ -405,41 +472,8 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
                 llmActors.get(llmActorIndex % llmActors.size());
             llmActorIndex++;
             
-            log.info("[ORCHESTRATOR] FORWARD → LLMActor (preserving replyTo chain)");
-            log.info("[ORCHESTRATOR] Selected LLMActor: {}", selectedLLMActor.path());
-            System.out.println("[ORCHESTRATOR] FORWARD → LLMActor: " + selectedLLMActor.path());
-            System.out.println("[ORCHESTRATOR] (replyTo preserved for response routing)");
-            
-            // Per-request reply ref carries the original replyTo for this query only
-            final ActorRef<QueryResult> originalReplyTo = command.replyTo;
-            final String finalWorkerPath = command.workerPath;
-            final int finalChunksFound = chunksFound;
-            final long finalStartTime = command.startTimeMs;
-            
-            // Pass logger to LLMActor
-            ActorRef<LoggingActor.Command> loggerForLLM = 
-                loggingActors.isEmpty() ? null : loggingActors.get(0);
-            
-            // Send to LLM; it replies straight to the per-request ref (FORWARD of replyTo)
-            getContext().ask(
-                LLMActor.LLMResponse.class,
-                selectedLLMActor,
-                STEP_TIMEOUT,
-                replyTo -> new LLMActor.GenerateAnswer(
-                    command.originalQuery,
-                    searchResponse.getChunks(),
-                    replyTo,
-                    loggerForLLM
-                ),
-                (response, failure) -> new LLMCompleted(
-                    response,
-                    failure,
-                    originalReplyTo,
-                    finalWorkerPath,
-                    finalChunksFound,
-                    finalStartTime
-                )
-            );
+            askLlm(command.originalQuery, searchResponse.getChunks(), command.replyTo,
+                command.workerPath, command.startTimeMs, selectedLLMActor, 1);
             
         } catch (Exception e) {
             log.error("[ORCHESTRATOR] Error in search completion: {}", e.getMessage(), e);
@@ -452,8 +486,17 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
     // Reply to original sender
     private Behavior<Command> onLLMCompleted(LLMCompleted command) {
         if (command.failure != null) {
+            // Timed out (LLM actor dead, unreachable or stuck): retry once elsewhere
             log.error("[ORCHESTRATOR] LLM step failed: {}", command.failure.getMessage());
-            command.originalReplyTo.tell(QueryResult.error("Answer generation failed: " + command.failure.getMessage()));
+            ActorRef<LLMActor.Command> other =
+                command.attempt == 1 ? pickOther(llmActors, command.llmActor) : null;
+            if (other != null) {
+                System.out.println("[ORCHESTRATOR] LLM step timed out, retrying on another LLMActor");
+                askLlm(command.originalQuery, command.chunks, command.originalReplyTo, command.workerPath,
+                    command.startTimeMs, other, command.attempt + 1);
+            } else {
+                command.originalReplyTo.tell(QueryResult.error("Answer generation failed: " + command.failure.getMessage()));
+            }
             return this;
         }
         log.info("---");
@@ -475,7 +518,7 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
                 command.llmResponse.answer,
                 command.workerPath,
                 command.llmResponse.processedByNode,
-                command.chunksFound,
+                command.chunks.size(),
                 totalResponseTime,
                 searchWorkers.size()
             );

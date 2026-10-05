@@ -136,4 +136,86 @@ class OrchestratorActorTest {
         callerA.expectNoMessage(Duration.ofMillis(200));
         callerB.expectNoMessage(Duration.ofMillis(200));
     }
+
+    // ---- per-step timeouts and retry ----
+
+    private static final String SHORT_TIMEOUTS =
+        "documind.orchestrator.search-timeout = 300ms\n"
+        + "documind.orchestrator.llm-timeout = 300ms\n";
+
+    /** Search worker that echoes immediately. */
+    static Behavior<SearchWorkerActor.Command> echoWorker() {
+        return batchingWorker(1);
+    }
+
+    @Test
+    void searchTimeoutIsRetriedOnAnotherWorker() {
+        testKit.shutdownTestKit();
+        testKit = ActorTestKit.create(TestConfigs.local(SHORT_TIMEOUTS));
+
+        // A worker on a "dead" node never answers
+        spawnRegistered(Behaviors.<SearchWorkerActor.Command>ignore(), SearchWorkerActor.SEARCH_WORKER_KEY);
+        ActorRef<SearchWorkerActor.Command> good =
+            spawnRegistered(echoWorker(), SearchWorkerActor.SEARCH_WORKER_KEY);
+        spawnRegistered(echoLlm("Node-test"), LLMActor.SERVICE_KEY);
+        ActorRef<OrchestratorActor.Command> orchestrator =
+            testKit.spawn(OrchestratorActor.create("Node-test"), "orchestrator");
+        awaitReady(orchestrator);
+
+        // Round-robin means at least one of two queries starts on the dead worker
+        TestProbe<OrchestratorActor.QueryResult> caller = testKit.createTestProbe();
+        for (int i = 0; i < 2; i++) {
+            orchestrator.tell(new OrchestratorActor.ProcessQuery("question " + i, caller.getRef()));
+            OrchestratorActor.QueryResult result = caller.receiveMessage(Duration.ofSeconds(3));
+            assertTrue(result.success, "query " + i + " failed: " + result.errorMessage);
+            assertTrue(result.answer.contains("question " + i));
+            assertEquals(good.path().toString(), result.workerPath);
+        }
+    }
+
+    @Test
+    void searchFailsFastWhenNoOtherWorkerAnswers() {
+        testKit.shutdownTestKit();
+        testKit = ActorTestKit.create(TestConfigs.local(SHORT_TIMEOUTS));
+
+        spawnRegistered(Behaviors.<SearchWorkerActor.Command>ignore(), SearchWorkerActor.SEARCH_WORKER_KEY);
+        spawnRegistered(Behaviors.<SearchWorkerActor.Command>ignore(), SearchWorkerActor.SEARCH_WORKER_KEY);
+        spawnRegistered(echoLlm("Node-test"), LLMActor.SERVICE_KEY);
+        ActorRef<OrchestratorActor.Command> orchestrator =
+            testKit.spawn(OrchestratorActor.create("Node-test"), "orchestrator");
+
+        TestProbe<OrchestratorActor.QueryResult> caller = testKit.createTestProbe();
+        // Retry until discovery has happened, then expect a timeout error (two attempts, ~600ms)
+        OrchestratorActor.QueryResult result;
+        long deadline = System.currentTimeMillis() + 5_000;
+        do {
+            orchestrator.tell(new OrchestratorActor.ProcessQuery("lost question", caller.getRef()));
+            result = caller.receiveMessage(Duration.ofSeconds(3));
+        } while (result.errorMessage != null && result.errorMessage.startsWith("No search workers")
+                 && System.currentTimeMillis() < deadline);
+
+        assertFalse(result.success);
+        assertTrue(result.errorMessage.startsWith("Search failed"), result.errorMessage);
+    }
+
+    @Test
+    void llmTimeoutIsRetriedOnAnotherLlmActor() {
+        testKit.shutdownTestKit();
+        testKit = ActorTestKit.create(TestConfigs.local(SHORT_TIMEOUTS));
+
+        spawnRegistered(echoWorker(), SearchWorkerActor.SEARCH_WORKER_KEY);
+        spawnRegistered(Behaviors.<LLMActor.Command>ignore(), LLMActor.SERVICE_KEY);
+        spawnRegistered(echoLlm("Node-good"), LLMActor.SERVICE_KEY);
+        ActorRef<OrchestratorActor.Command> orchestrator =
+            testKit.spawn(OrchestratorActor.create("Node-test"), "orchestrator");
+        awaitReady(orchestrator);
+
+        TestProbe<OrchestratorActor.QueryResult> caller = testKit.createTestProbe();
+        for (int i = 0; i < 2; i++) {
+            orchestrator.tell(new OrchestratorActor.ProcessQuery("question " + i, caller.getRef()));
+            OrchestratorActor.QueryResult result = caller.receiveMessage(Duration.ofSeconds(3));
+            assertTrue(result.success, "query " + i + " failed: " + result.errorMessage);
+            assertEquals("Node-good", result.llmNodeId);
+        }
+    }
 }
