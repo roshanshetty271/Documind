@@ -159,4 +159,29 @@ class BlockingDispatcherTest {
             assertTrue(thread.contains("blocking-io-dispatcher"), "LLM call ran on " + thread);
         }
     }
+
+    @Test
+    void llmActorFallsBackToPassagesWhenOpenAiKeepsFailing() {
+        ChatModel failing = new ChatModel() {
+            @Override
+            public ChatResponse call(Prompt prompt) {
+                throw new org.springframework.ai.retry.TransientAiException("OpenAI unavailable");
+            }
+
+            @Override
+            public ChatOptions getDefaultOptions() {
+                return null;
+            }
+        };
+        ActorRef<LLMActor.Command> llm = testKit.spawn(
+            LLMActor.create(new LLMService(failing, 2, 1), "Node-test"));
+
+        TestProbe<LLMActor.LLMResponse> probe = testKit.createTestProbe();
+        llm.tell(new LLMActor.GenerateAnswer("q", List.of("Actors process one message at a time."),
+            probe.getRef(), null));
+
+        LLMActor.LLMResponse response = probe.receiveMessage(Duration.ofSeconds(5));
+        assertTrue(response.success);
+        assertTrue(response.answer.contains("[1] Actors process one message at a time."), response.answer);
+    }
 }

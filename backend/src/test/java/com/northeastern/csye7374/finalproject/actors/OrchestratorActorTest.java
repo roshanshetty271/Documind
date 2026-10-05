@@ -248,4 +248,28 @@ class OrchestratorActorTest {
         assertEquals(0, result.chunksFound);
         llm.expectNoMessage(Duration.ofMillis(200));
     }
+
+    @Test
+    void llmTimeoutOnEveryActorFallsBackToPassages() {
+        testKit.shutdownTestKit();
+        testKit = ActorTestKit.create(TestConfigs.local(SHORT_TIMEOUTS));
+
+        spawnRegistered(echoWorker(), SearchWorkerActor.SEARCH_WORKER_KEY);
+        spawnRegistered(Behaviors.<LLMActor.Command>ignore(), LLMActor.SERVICE_KEY);
+        spawnRegistered(Behaviors.<LLMActor.Command>ignore(), LLMActor.SERVICE_KEY);
+        ActorRef<OrchestratorActor.Command> orchestrator =
+            testKit.spawn(OrchestratorActor.create("Node-test"), "orchestrator");
+
+        TestProbe<OrchestratorActor.QueryResult> caller = testKit.createTestProbe();
+        OrchestratorActor.QueryResult result;
+        long deadline = System.currentTimeMillis() + 5_000;
+        do {
+            orchestrator.tell(new OrchestratorActor.ProcessQuery("question X", caller.getRef()));
+            result = caller.receiveMessage(Duration.ofSeconds(3));
+        } while (!result.success && System.currentTimeMillis() < deadline);
+
+        assertTrue(result.success, String.valueOf(result.errorMessage));
+        assertTrue(result.answer.startsWith("The answer service is unavailable right now."), result.answer);
+        assertTrue(result.answer.contains("[1] chunk for question X"), result.answer);
+    }
 }

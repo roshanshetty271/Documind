@@ -498,7 +498,16 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
                 askLlm(command.originalQuery, command.chunks, command.originalReplyTo, command.workerPath,
                     command.startTimeMs, other, command.attempt + 1);
             } else {
-                command.originalReplyTo.tell(QueryResult.error("Answer generation failed: " + command.failure.getMessage()));
+                // No LLM actor answered in time: return the retrieved passages instead
+                long totalResponseTime = System.currentTimeMillis() - command.startTimeMs;
+                command.originalReplyTo.tell(new QueryResult(
+                    LLMService.fallbackAnswer(command.chunks),
+                    command.workerPath,
+                    "fallback",
+                    command.chunks.size(),
+                    totalResponseTime,
+                    searchWorkers.size()
+                ));
             }
             return this;
         }

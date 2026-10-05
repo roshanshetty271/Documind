@@ -7,6 +7,11 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.ai.retry.NonTransientAiException;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.retry.support.RetryTemplate;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.List;
 
@@ -21,6 +26,17 @@ public class LLMService {
     
     private final ChatModel chatModel;
     
+    // Bounded retry around each OpenAI call: 3 attempts, 500ms then 1s backoff.
+    // Client errors (bad key, bad request) are not retried.
+    private static final int DEFAULT_MAX_ATTEMPTS = 3;
+    private static final long DEFAULT_INITIAL_BACKOFF_MS = 500;
+    private final int maxAttempts;
+    private final long initialBackoffMs;
+    
+    // HTTP timeouts so a hung OpenAI call cannot hold a blocking-pool thread forever
+    private static final int CONNECT_TIMEOUT_MS = 10_000;
+    private static final int READ_TIMEOUT_MS = 20_000;
+    
     // Exact reply the model must give when the passages do not contain the answer
     public static final String NOT_FOUND_ANSWER = "I could not find the answer in the uploaded documents.";
     
@@ -34,7 +50,7 @@ public class LLMService {
             log.info("Initializing LLMService with OpenAI ChatModel");
             
             // Create OpenAI API client
-            OpenAiApi openAiApi = new OpenAiApi(apiKey);
+            OpenAiApi openAiApi = createOpenAiApi(apiKey);
             
             // Create chat options
             OpenAiChatOptions options = OpenAiChatOptions.builder()
@@ -43,7 +59,10 @@ public class LLMService {
                 .build();
             
             // Initialize ChatModel
-            this.chatModel = new OpenAiChatModel(openAiApi, options);
+            this.chatModel = createChatModel(openAiApi, options);
+            
+            this.maxAttempts = DEFAULT_MAX_ATTEMPTS;
+            this.initialBackoffMs = DEFAULT_INITIAL_BACKOFF_MS;
             
             log.info("LLMService initialized successfully with model: {}", DEFAULT_MODEL);
             
@@ -58,14 +77,17 @@ public class LLMService {
         try {
             log.info("Initializing LLMService with model: {}, temperature: {}", model, temperature);
             
-            OpenAiApi openAiApi = new OpenAiApi(apiKey);
+            OpenAiApi openAiApi = createOpenAiApi(apiKey);
             
             OpenAiChatOptions options = OpenAiChatOptions.builder()
                 .withModel(model)
                 .withTemperature(temperature)
                 .build();
             
-            this.chatModel = new OpenAiChatModel(openAiApi, options);
+            this.chatModel = createChatModel(openAiApi, options);
+            
+            this.maxAttempts = DEFAULT_MAX_ATTEMPTS;
+            this.initialBackoffMs = DEFAULT_INITIAL_BACKOFF_MS;
             
             log.info("LLMService initialized successfully");
             
@@ -77,7 +99,84 @@ public class LLMService {
     
     // Constructor with a ready ChatModel (used by tests to avoid real API calls)
     public LLMService(ChatModel chatModel) {
+        this(chatModel, DEFAULT_MAX_ATTEMPTS, DEFAULT_INITIAL_BACKOFF_MS);
+    }
+    
+    // Constructor with a ready ChatModel and custom retry settings
+    public LLMService(ChatModel chatModel, int maxAttempts, long initialBackoffMs) {
         this.chatModel = chatModel;
+        this.maxAttempts = Math.max(1, maxAttempts);
+        this.initialBackoffMs = Math.max(0, initialBackoffMs);
+    }
+    
+    // OpenAI client with connect/read timeouts
+    private static OpenAiApi createOpenAiApi(String apiKey) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        requestFactory.setReadTimeout(READ_TIMEOUT_MS);
+        return new OpenAiApi("https://api.openai.com", apiKey,
+            RestClient.builder().requestFactory(requestFactory), WebClient.builder());
+    }
+    
+    // Spring AI's default template retries up to 10 times with backoff of up to
+    // 3 minutes; turn it off and use the bounded retry in callWithRetry instead
+    private static ChatModel createChatModel(OpenAiApi openAiApi, OpenAiChatOptions options) {
+        RetryTemplate singleAttempt = RetryTemplate.builder().maxAttempts(1).build();
+        return new OpenAiChatModel(openAiApi, options, null, singleAttempt);
+    }
+    
+    /**
+     * Call the model with a bounded retry and exponential backoff.
+     * Non-transient errors (4xx such as an invalid key) fail immediately.
+     */
+    private String callWithRetry(Prompt prompt) {
+        long backoffMs = initialBackoffMs;
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return chatModel.call(prompt)
+                    .getResult()
+                    .getOutput()
+                    .getContent();
+            } catch (NonTransientAiException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                if (attempt >= maxAttempts) {
+                    throw e;
+                }
+                log.warn("OpenAI call failed (attempt {}/{}): {}. Retrying in {} ms",
+                    attempt, maxAttempts, e.getMessage(), backoffMs);
+                try {
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+                backoffMs *= 2;
+            }
+        }
+    }
+    
+    /**
+     * Answer used when the model cannot be reached after retries: the
+     * retrieved passages themselves, numbered like the prompt.
+     */
+    public static String fallbackAnswer(List<String> contextChunks) {
+        StringBuilder answer = new StringBuilder(
+            "The answer service is unavailable right now. "
+            + "These are the most relevant passages from your documents:");
+        int number = 0;
+        if (contextChunks != null) {
+            for (String chunk : contextChunks) {
+                if (chunk != null && !chunk.trim().isEmpty()) {
+                    number++;
+                    answer.append("\n\n[").append(number).append("] ").append(chunk.trim());
+                }
+            }
+        }
+        if (number == 0) {
+            answer.append("\n\n(none)");
+        }
+        return answer.toString();
     }
     
     // Generate answer using RAG
@@ -93,10 +192,7 @@ public class LLMService {
             Prompt prompt = new Prompt(promptText);
             
             // Call ChatModel and extract response (SAME as HW3 line 127)
-            String response = chatModel.call(prompt)
-                .getResult()
-                .getOutput()
-                .getContent();
+            String response = callWithRetry(prompt);
             
             log.info("Answer generated successfully ({} characters)", response.length());
             log.debug("Generated answer: {}", response.substring(0, Math.min(100, response.length())) + "...");
@@ -194,10 +290,7 @@ public class LLMService {
             
             // Use SAME ChatModel pattern from HW3
             Prompt prompt = new Prompt(promptText);
-            String response = chatModel.call(prompt)
-                .getResult()
-                .getOutput()
-                .getContent();
+            String response = callWithRetry(prompt);
             
             log.info("Answer generated with custom instructions");
             return response;
@@ -221,10 +314,7 @@ public class LLMService {
             
             // Use SAME ChatModel pattern from HW3
             Prompt prompt = new Prompt(query);
-            String response = chatModel.call(prompt)
-                .getResult()
-                .getOutput()
-                .getContent();
+            String response = callWithRetry(prompt);
             
             log.info("Direct answer generated");
             return response;

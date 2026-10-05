@@ -7,6 +7,8 @@ import org.apache.pdfbox.text.PDFTextStripper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -47,10 +49,16 @@ public class FileUploadController {
         
         log.info("✅ FileUploadController ready for file uploads!");
     }
+    
+    // Constructor with given services (used by tests; Spring uses the no-arg one)
+    FileUploadController(EmbeddingService embeddingService, QdrantService qdrantService) {
+        this.embeddingService = embeddingService;
+        this.qdrantService = qdrantService;
+    }
 
     // Upload and index PDF/TXT file - POST /api/upload
     @PostMapping("/upload")
-    public Map<String, Object> uploadFile(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<Map<String, Object>> uploadFile(@RequestParam("file") MultipartFile file) {
         long startTime = System.currentTimeMillis();
         Map<String, Object> response = new HashMap<>();
         
@@ -153,6 +161,17 @@ public class FileUploadController {
             log.info("[Upload] SUCCESS! {} indexed with {} chunks in {}s", 
                     filename, chunks.size(), String.format("%.2f", processingTime));
             
+            return ResponseEntity.ok(response);
+            
+        } catch (IllegalArgumentException e) {
+            // Bad input (empty, too large, wrong type, no text): client error
+            System.out.println("[ERROR] Rejected " + filename + ": " + e.getMessage());
+            log.warn("[Upload] Rejected file {}: {}", filename, e.getMessage());
+            response.put("success", false);
+            response.put("error", e.getMessage());
+            response.put("filename", filename);
+            return ResponseEntity.badRequest().body(response);
+            
         } catch (Exception e) {
             System.out.println("---");
             System.out.println("[ERROR] Failed to process " + filename);
@@ -163,9 +182,9 @@ public class FileUploadController {
             response.put("success", false);
             response.put("error", e.getMessage());
             response.put("filename", filename);
+            // Indexing failed on our side (e.g. Qdrant down): not a 200
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
-        
-        return response;
     }
 
     /**

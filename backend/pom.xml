@@ -181,6 +181,14 @@
             <scope>test</scope>
         </dependency>
         
+        <!-- Spring Test (MockMultipartFile for controller tests) -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-test</artifactId>
+            <version>6.1.13</version>
+            <scope>test</scope>
+        </dependency>
+        
         <!-- Testcontainers (starts a throwaway Qdrant for integration tests;
              those tests are skipped when Docker is not available) -->
         <dependency>

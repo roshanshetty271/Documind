@@ -226,8 +226,12 @@ public class LLMActor extends AbstractBehavior<LLMActor.Command> {
                 ));
             }
             
-            // Reply with error
-            cmd.replyTo.tell(new LLMResponse(e.getMessage(), nodeId));
+            // OpenAI still failing after LLMService's retries: fall back to the
+            // retrieved passages so the user still gets something useful
+            double responseTimeSeconds = (System.currentTimeMillis() - ready.startTimeMs) / 1000.0;
+            cmd.replyTo.tell(new LLMResponse(
+                LLMService.fallbackAnswer(cmd.contextChunks), responseTimeSeconds, nodeId));
+            System.out.println("[LLM-ACTOR] Replied with retrieved passages (fallback)");
             System.out.println("---");
         }
         
