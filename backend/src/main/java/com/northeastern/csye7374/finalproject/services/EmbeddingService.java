@@ -66,6 +66,14 @@ public class EmbeddingService {
     }
     
     /**
+     * Constructor with an already loaded model (null is allowed for test
+     * subclasses that override vectorize()).
+     */
+    protected EmbeddingService(Word2Vec word2Vec) {
+        this.word2Vec = word2Vec;
+    }
+    
+    /**
      * Vectorize text using Word2Vec
      * 
      * Strategy: Average all word vectors in the text

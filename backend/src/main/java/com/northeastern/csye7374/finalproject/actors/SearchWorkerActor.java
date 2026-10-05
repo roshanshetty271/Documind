@@ -2,6 +2,7 @@ package com.northeastern.csye7374.finalproject.actors;
 
 import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
+import akka.actor.typed.DispatcherSelector;
 import akka.actor.typed.javadsl.AbstractBehavior;
 import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
@@ -19,6 +20,8 @@ import com.northeastern.csye7374.finalproject.services.QdrantService;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 /**
  * SearchWorkerActor - Handles vector search
@@ -49,38 +52,67 @@ public class SearchWorkerActor extends AbstractBehavior<SearchWorkerActor.Comman
         }
     }
     
+    // Internal: blocking search finished on the blocking-io dispatcher
+    private static final class SearchFinished implements Command {
+        public final SearchResponse response;
+        public final ActorRef<SearchResponse> replyTo;
+        
+        public SearchFinished(SearchResponse response, ActorRef<SearchResponse> replyTo) {
+            this.response = response;
+            this.replyTo = replyTo;
+        }
+    }
+    
+    // Dispatcher for blocking calls (defined in application.conf)
+    public static final String BLOCKING_DISPATCHER = "documind.blocking-io-dispatcher";
+    
     private final QdrantService qdrantService;
     private final EmbeddingService embeddingService;
     private final String collectionName;
-    private SearchWorkerActor(ActorContext<Command> context, String collectionName, EmbeddingService embeddingService) {
+    private final Executor blockingExecutor;
+    private SearchWorkerActor(ActorContext<Command> context, String collectionName,
+                              EmbeddingService embeddingService, QdrantService qdrantService) {
         super(context);
         this.collectionName = collectionName;
         this.embeddingService = embeddingService;
+        this.qdrantService = qdrantService;
+        this.blockingExecutor = context.getSystem().dispatchers()
+            .lookup(DispatcherSelector.fromConfig(BLOCKING_DISPATCHER));
         
-        try {
-            // Initialize Qdrant service
-            this.qdrantService = new QdrantService();
-            
-            log.info("SearchWorkerActor initialized for collection: {}", collectionName);
-            
-        } catch (Exception e) {
-            log.error("Error initializing SearchWorkerActor: {}", e.getMessage(), e);
-            throw new RuntimeException("Failed to initialize SearchWorkerActor", e);
-        }
+        log.info("SearchWorkerActor initialized for collection: {}", collectionName);
     }
     
     // Factory method - registers with Receptionist
     public static Behavior<Command> create(String collectionName, EmbeddingService embeddingService) {
         return Behaviors.setup(context -> {
-            // Register with Receptionist
-            context.getSystem().receptionist().tell(
-                Receptionist.register(SEARCH_WORKER_KEY, context.getSelf())
-            );
-            
-            log.info("SearchWorker registered with Receptionist: {}", context.getSelf().path());
-            
-            return new SearchWorkerActor(context, collectionName, embeddingService);
+            QdrantService qdrantService;
+            try {
+                // Initialize Qdrant service
+                qdrantService = new QdrantService();
+            } catch (Exception e) {
+                log.error("Error initializing SearchWorkerActor: {}", e.getMessage(), e);
+                throw new RuntimeException("Failed to initialize SearchWorkerActor", e);
+            }
+            return register(context, collectionName, embeddingService, qdrantService);
         });
+    }
+    
+    // Factory method with a given QdrantService (also used by tests)
+    public static Behavior<Command> create(String collectionName, EmbeddingService embeddingService,
+                                           QdrantService qdrantService) {
+        return Behaviors.setup(context -> register(context, collectionName, embeddingService, qdrantService));
+    }
+    
+    private static Behavior<Command> register(ActorContext<Command> context, String collectionName,
+                                              EmbeddingService embeddingService, QdrantService qdrantService) {
+        // Register with Receptionist
+        context.getSystem().receptionist().tell(
+            Receptionist.register(SEARCH_WORKER_KEY, context.getSelf())
+        );
+        
+        log.info("SearchWorker registered with Receptionist: {}", context.getSelf().path());
+        
+        return new SearchWorkerActor(context, collectionName, embeddingService, qdrantService);
     }
     
     // Message handler
@@ -88,13 +120,31 @@ public class SearchWorkerActor extends AbstractBehavior<SearchWorkerActor.Comman
     public Receive<Command> createReceive() {
         return newReceiveBuilder()
             .onMessage(SearchCommand.class, this::onSearchCommand)
+            .onMessage(SearchFinished.class, this::onSearchFinished)
             .build();
     }
     
-    // Handle search request
+    // Handle search request: run the blocking work off the actor's thread
     private Behavior<Command> onSearchCommand(SearchCommand command) {
-        SearchQuery searchQuery = command.searchQuery;
+        CompletableFuture<SearchResponse> future = CompletableFuture.supplyAsync(
+            () -> runSearch(command.searchQuery), blockingExecutor);
         
+        getContext().pipeToSelf(future, (response, failure) -> new SearchFinished(
+            response != null ? response : new SearchResponse("Search failed: " + failure.getMessage()),
+            command.replyTo));
+        
+        return this;
+    }
+    
+    // Reply once the blocking search is done
+    private Behavior<Command> onSearchFinished(SearchFinished finished) {
+        finished.replyTo.tell(finished.response);
+        log.debug("SearchResponse sent to requester");
+        return this;
+    }
+    
+    // Vectorize + Qdrant search + re-rank (blocking, runs on the blocking-io dispatcher)
+    private SearchResponse runSearch(SearchQuery searchQuery) {
         log.info("Received SearchQuery: {}", searchQuery);
         
         try {
@@ -129,27 +179,14 @@ public class SearchWorkerActor extends AbstractBehavior<SearchWorkerActor.Comman
                 scores.add((double) result.getScore());
             }
             
-            SearchResponse response = new SearchResponse(chunks, scores);
-            
-            // Reply to sender
-            command.replyTo.tell(response);
-            
-            log.debug("SearchResponse sent to requester");
+            return new SearchResponse(chunks, scores);
             
         } catch (Exception e) {
             // Error handling
             log.error("Error processing search query: {}", e.getMessage(), e);
             
-            SearchResponse errorResponse = new SearchResponse(
-                "Search failed: " + e.getMessage()
-            );
-            
-            // Reply with error
-            command.replyTo.tell(errorResponse);
+            return new SearchResponse("Search failed: " + e.getMessage());
         }
-        
-        // Return same behavior
-        return this;
     }
 }
 

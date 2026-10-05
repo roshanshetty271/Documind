@@ -72,6 +72,11 @@ public class LLMService {
         }
     }
     
+    // Constructor with a ready ChatModel (used by tests to avoid real API calls)
+    public LLMService(ChatModel chatModel) {
+        this.chatModel = chatModel;
+    }
+    
     // Generate answer using RAG
     public String generateAnswer(String query, List<String> contextChunks) {
         try {
