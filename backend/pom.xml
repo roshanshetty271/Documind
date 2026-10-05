@@ -12,8 +12,10 @@
     <description>Akka Cluster-based distributed RAG system with Qdrant and Spring AI</description>
     
     <properties>
-        <maven.compiler.source>11</maven.compiler.source>
-        <maven.compiler.target>11</maven.compiler.target>
+        <!-- Java 17: Spring Boot 3.2 and Spring AI 1.0.0-M4 ship Java 17 bytecode,
+             so the project cannot compile or run on Java 11 -->
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         
         <!-- Dependency versions -->
@@ -26,6 +28,7 @@
         <slf4j.version>2.0.9</slf4j.version>
         <logback.version>1.4.11</logback.version>
         <junit.version>5.10.0</junit.version>
+        <testcontainers.version>1.21.4</testcontainers.version>
     </properties>
     
     <dependencyManagement>
@@ -180,6 +183,29 @@
             <scope>test</scope>
         </dependency>
         
+        <!-- Spring Test (MockMultipartFile for controller tests) -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-test</artifactId>
+            <version>6.1.13</version>
+            <scope>test</scope>
+        </dependency>
+        
+        <!-- Testcontainers (starts a throwaway Qdrant for integration tests;
+             those tests are skipped when Docker is not available) -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        
         <!-- Akka Actor TestKit (for Actor Testing) -->
         <dependency>
             <groupId>com.typesafe.akka</groupId>
@@ -209,8 +235,8 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
                 <configuration>
-                    <source>11</source>
-                    <target>11</target>
+                    <source>17</source>
+                    <target>17</target>
                 </configuration>
             </plugin>
             

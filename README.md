@@ -39,14 +39,14 @@ The system uses RAG (Retrieval-Augmented Generation) to find relevant content fr
 - Built with Vite
 
 **External Services**
-- Qdrant vector database (Port 6333)
+- Qdrant vector database (port 6334 gRPC, used by the backend; 6333 HTTP/dashboard)
 - OpenAI API (requires API key)
 
 ## Prerequisites
 
 Before running this project, make sure you have:
 
-1. **Java 17 or higher**
+1. **Java 17 or higher** (the pom compiles for Java 17; Spring Boot 3.2 and Spring AI need it)
    ```bash
    java -version
    ```
@@ -69,6 +69,7 @@ Before running this project, make sure you have:
 
 5. **OpenAI API Key**
    - Get one from https://platform.openai.com/api-keys
+   - Required: cluster nodes exit at startup if `OPENAI_API_KEY` is not set
    - Set it as environment variable:
      ```bash
      # Windows
@@ -80,7 +81,8 @@ Before running this project, make sure you have:
 
 6. **Word2Vec Model**
    - Download `GoogleNews-vectors-negative300-SLIM.bin` (1.5GB)
-   - Place it in `backend/src/main/resources/`
+   - Place it in `backend/models/` (the code loads `models/GoogleNews-vectors-negative300-SLIM.bin`
+     relative to the `backend` folder, where the `mvn` commands below are run)
    - Get it from: https://github.com/eyaler/word2vec-slim
 
 ## Setup Instructions
@@ -106,8 +108,10 @@ cd ..
 
 Open a new terminal and run:
 ```bash
-docker run -p 6333:6333 qdrant/qdrant
+docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
 ```
+
+The backend talks to Qdrant over gRPC on port 6334; 6333 is the HTTP API and web dashboard.
 
 Keep this running. You should see "Qdrant is ready!" in the logs.
 
@@ -190,8 +194,6 @@ The answer will show:
 - Which cluster node handled the request
 - Number of relevant chunks found
 
-```
-
 ## Akka Communication Patterns in DocuMind
 
 DocuMind demonstrates three key Akka communication patterns:
@@ -218,7 +220,7 @@ OrchestratorActor passes the original `replyTo` to LLMActor, so the response goe
 DocuMind keeps working even if one node dies:
 
 1. **Kill Node 2551**: Press Ctrl+C in the terminal running port 2551
-2. **Check Logs**: Node 2552 detects it as UNREACHABLE
+2. **Check Logs**: Node 2552 detects it as UNREACHABLE; the Split Brain Resolver downs it after about 10 seconds of stable membership
 3. **Ask a Question**: System still works! Query goes to Node 2552
 4. **Restart Node 2551**: Run `mvn exec:java "-Dexec.args=2551"` again
 5. **Watch Recovery**: Node 2551 rejoins the cluster automatically
@@ -245,12 +247,12 @@ lsof -ti:2551 | xargs kill -9
 ```
 
 ### Qdrant Connection Failed
-**Problem**: `Connection refused: localhost/127.0.0.1:6333`
+**Problem**: `Connection refused: localhost/127.0.0.1:6334` (or `UNAVAILABLE: io exception`)
 
-**Solution**: Make sure Qdrant is running
+**Solution**: Make sure Qdrant is running with the gRPC port published
 ```bash
 docker ps  # Check if container is running
-docker run -p 6333:6333 qdrant/qdrant  # Start if not running
+docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant  # Start if not running
 ```
 
 ### OpenAI API Error
@@ -283,6 +285,16 @@ export OPENAI_API_KEY=sk-...  # Linux/Mac
 - User authentication and query history
 - Document version control and update detection
 
+## Configuration
+
+| Setting | Where | Default |
+|---|---|---|
+| `OPENAI_API_KEY` | env var, cluster nodes | required |
+| `DOCUMIND_CORS_ALLOWED_ORIGINS` | env var, REST API (`documind.cors.allowed-origins`) | `http://localhost:3000,http://127.0.0.1:3000` |
+| `DOCUMIND_MIN_SCORE` | env var, cluster nodes (`documind.search.min-score`) | `0.3` |
+| Search / LLM step timeouts | `application.conf` (`documind.orchestrator.*`) | 5s / 20s |
+| Upload limits | `application.properties` | 10MB, PDFs up to 300 pages |
+
 ## Testing
 
 Run unit tests:
@@ -290,6 +302,9 @@ Run unit tests:
 cd backend
 mvn test
 ```
+
+The Qdrant integration tests start a temporary Qdrant with Testcontainers and are skipped
+when Docker is not available. No test needs the Word2Vec model or an OpenAI key.
 
 Test RAG pipeline without cluster:
 ```bash

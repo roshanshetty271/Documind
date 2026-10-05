@@ -130,17 +130,16 @@ public class LoggingActor extends AbstractBehavior<LoggingActor.Command> {
     // Log query (fire-and-forget)
     private Behavior<Command> onLogQuery(LogQuery logMsg) {
         String time = formatTime(logMsg.timestamp);
-        String queryPreview = logMsg.query.length() > 50 
-            ? logMsg.query.substring(0, 50) + "..." 
-            : logMsg.query;
+        // Only the length: question text is user data and stays out of the logs
+        String queryPreview = "(" + logMsg.query.length() + " chars)";
         
         log.info("---");
         log.info("[LOGGER] [{}] Received via TELL (fire-and-forget)", nodeId);
         log.info("[LOGGER] Type: QUERY_RESPONSE");
         log.info("[LOGGER] Time: {}", time);
         log.info("[LOGGER] From Node: {}", logMsg.nodeId);
-        log.info("[LOGGER] Query: \"{}\"", queryPreview);
-        log.info("[LOGGER] Response preview: \"{}\"", logMsg.responsePreview);
+        log.info("[LOGGER] Query: {}", queryPreview);
+        log.info("[LOGGER] Response: {}", logMsg.responsePreview);
         log.info("[LOGGER] ✓ Logged (NO REPLY - fire-and-forget pattern)");
         log.info("---");
         
@@ -150,8 +149,8 @@ public class LoggingActor extends AbstractBehavior<LoggingActor.Command> {
         System.out.println("[LOGGER] Type: QUERY_RESPONSE");
         System.out.println("[LOGGER] Time: " + time);
         System.out.println("[LOGGER] From Node: " + logMsg.nodeId);
-        System.out.println("[LOGGER] Query: \"" + queryPreview + "\"");
-        System.out.println("[LOGGER] Response: \"" + logMsg.responsePreview + "\"");
+        System.out.println("[LOGGER] Query: " + queryPreview);
+        System.out.println("[LOGGER] Response: " + logMsg.responsePreview);
         System.out.println("[LOGGER] ✓ Logged (NO REPLY - fire-and-forget pattern)");
         System.out.println("---");
         
@@ -161,16 +160,15 @@ public class LoggingActor extends AbstractBehavior<LoggingActor.Command> {
     // Log search (fire-and-forget)
     private Behavior<Command> onLogSearch(LogSearch logMsg) {
         String time = formatTime(logMsg.timestamp);
-        String queryPreview = logMsg.query.length() > 50 
-            ? logMsg.query.substring(0, 50) + "..." 
-            : logMsg.query;
+        // Only the length: question text is user data and stays out of the logs
+        String queryPreview = "(" + logMsg.query.length() + " chars)";
         
         log.info("---");
         log.info("[LOGGER] [{}] Received via TELL (fire-and-forget)", nodeId);
         log.info("[LOGGER] Type: SEARCH_COMPLETED");
         log.info("[LOGGER] Time: {}", time);
         log.info("[LOGGER] From Node: {}", logMsg.nodeId);
-        log.info("[LOGGER] Query: \"{}\"", queryPreview);
+        log.info("[LOGGER] Query: {}", queryPreview);
         log.info("[LOGGER] Chunks Found: {}", logMsg.chunksFound);
         log.info("[LOGGER] ✓ Logged (NO REPLY - fire-and-forget pattern)");
         log.info("---");
@@ -181,7 +179,7 @@ public class LoggingActor extends AbstractBehavior<LoggingActor.Command> {
         System.out.println("[LOGGER] Type: SEARCH_COMPLETED");
         System.out.println("[LOGGER] Time: " + time);
         System.out.println("[LOGGER] From Node: " + logMsg.nodeId);
-        System.out.println("[LOGGER] Query: \"" + queryPreview + "\"");
+        System.out.println("[LOGGER] Query: " + queryPreview);
         System.out.println("[LOGGER] Chunks Found: " + logMsg.chunksFound);
         System.out.println("[LOGGER] ✓ Logged (NO REPLY - fire-and-forget pattern)");
         System.out.println("---");

@@ -75,9 +75,7 @@ public class ClusterClientConfig {
             "    \n" +
             "    # Minimum nodes\n" +
             "    min-nr-of-members = 1\n" +
-            "    \n" +
-            "    # Auto-down unreachable nodes\n" +
-            "    auto-down-unreachable-after = 10s\n" +
+            "    # Downing (Split Brain Resolver) comes from application.conf\n" +
             "  }\n" +
             "  \n" +
             "  # Logging\n" +

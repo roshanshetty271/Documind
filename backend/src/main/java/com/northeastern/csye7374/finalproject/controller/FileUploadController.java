@@ -7,6 +7,8 @@ import org.apache.pdfbox.text.PDFTextStripper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -24,7 +26,6 @@ import java.util.*;
  */
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "*")
 public class FileUploadController {
 
     private static final Logger log = LoggerFactory.getLogger(FileUploadController.class);
@@ -35,7 +36,8 @@ public class FileUploadController {
     private static final String COLLECTION_NAME = "course_documents";
     private static final int WINDOW_SIZE = 5;      // 5 sentences per chunk
     private static final int SLIDE_STEP = 2;       // 60% overlap
-    private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+    static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB (also set in application.properties)
+    static final int MAX_PDF_PAGES = 300;
 
     // Constructor
     public FileUploadController() {
@@ -47,10 +49,16 @@ public class FileUploadController {
         
         log.info("✅ FileUploadController ready for file uploads!");
     }
+    
+    // Constructor with given services (used by tests; Spring uses the no-arg one)
+    FileUploadController(EmbeddingService embeddingService, QdrantService qdrantService) {
+        this.embeddingService = embeddingService;
+        this.qdrantService = qdrantService;
+    }
 
     // Upload and index PDF/TXT file - POST /api/upload
     @PostMapping("/upload")
-    public Map<String, Object> uploadFile(@RequestParam("file") MultipartFile file) {
+    public ResponseEntity<Map<String, Object>> uploadFile(@RequestParam("file") MultipartFile file) {
         long startTime = System.currentTimeMillis();
         Map<String, Object> response = new HashMap<>();
         
@@ -153,6 +161,17 @@ public class FileUploadController {
             log.info("[Upload] SUCCESS! {} indexed with {} chunks in {}s", 
                     filename, chunks.size(), String.format("%.2f", processingTime));
             
+            return ResponseEntity.ok(response);
+            
+        } catch (IllegalArgumentException e) {
+            // Bad input (empty, too large, wrong type, no text): client error
+            System.out.println("[ERROR] Rejected " + filename + ": " + e.getMessage());
+            log.warn("[Upload] Rejected file {}: {}", filename, e.getMessage());
+            response.put("success", false);
+            response.put("error", e.getMessage());
+            response.put("filename", filename);
+            return ResponseEntity.badRequest().body(response);
+            
         } catch (Exception e) {
             System.out.println("---");
             System.out.println("[ERROR] Failed to process " + filename);
@@ -163,9 +182,9 @@ public class FileUploadController {
             response.put("success", false);
             response.put("error", e.getMessage());
             response.put("filename", filename);
+            // Indexing failed on our side (e.g. Qdrant down): not a 200
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
         }
-        
-        return response;
     }
 
     /**
@@ -173,6 +192,11 @@ public class FileUploadController {
      */
     private String extractTextFromPDF(MultipartFile file) throws IOException {
         try (PDDocument document = PDDocument.load(file.getInputStream())) {
+            // Page limit keeps one upload from tying up extraction and embedding
+            if (document.getNumberOfPages() > MAX_PDF_PAGES) {
+                throw new IllegalArgumentException("PDF has " + document.getNumberOfPages()
+                    + " pages. Max pages: " + MAX_PDF_PAGES);
+            }
             PDFTextStripper stripper = new PDFTextStripper();
             stripper.setSortByPosition(true);
             return stripper.getText(document);
@@ -255,6 +279,7 @@ public class FileUploadController {
         health.put("status", "UP");
         health.put("service", "FileUploadController");
         health.put("maxFileSize", "10MB");
+        health.put("maxPdfPages", MAX_PDF_PAGES);
         health.put("supportedFormats", Arrays.asList("PDF", "TXT"));
         health.put("metadataTracking", true);
         return health;

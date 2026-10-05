@@ -48,6 +48,15 @@ public class ClusterNode {
         // Get port from args or default to 2551
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 2551;
         
+        // Fail fast: without a key every answer would be a 401 from OpenAI
+        try {
+            LLMService.requireApiKey(System.getenv("OPENAI_API_KEY"));
+        } catch (IllegalArgumentException e) {
+            System.err.println("[CLUSTER] " + e.getMessage());
+            log.error("[CLUSTER] {}", e.getMessage());
+            System.exit(1);
+        }
+        
         log.info("Starting ClusterNode on port {}", port);
         
         // Start the cluster node
@@ -104,11 +113,7 @@ public class ClusterNode {
                 // ---═══
                 
                 // Initialize LLM Service
-                String apiKey = System.getenv("OPENAI_API_KEY");
-                if (apiKey == null || apiKey.isEmpty()) {
-                    apiKey = "your-api-key-here"; // TODO: Set real API key
-                    log.warn("OPENAI_API_KEY not set! Using placeholder.");
-                }
+                String apiKey = LLMService.requireApiKey(System.getenv("OPENAI_API_KEY"));
                 LLMService llmService = new LLMService(apiKey);
                 log.info("🔧 [CLUSTER] LLM Service initialized");
                 System.out.println("🔧 [CLUSTER] LLM Service initialized");

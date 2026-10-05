@@ -15,7 +15,6 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Qdrant Vector Database Service
@@ -29,9 +28,6 @@ public class QdrantService {
     
     private QdrantClient client;
     private static final int DEFAULT_BATCH_SIZE = 50;
-    
-    // Global counter for unique point IDs
-    private static final AtomicLong globalPointId = new AtomicLong(System.currentTimeMillis());
     
     /**
      * Constructor - Initialize Qdrant client
@@ -218,8 +214,20 @@ public class QdrantService {
     }
     
     /**
+     * Deterministic point ID for a chunk: a name-based (v3) UUID of
+     * filename + chunk index. Re-uploading the same file overwrites its
+     * points instead of duplicating them, and two JVMs indexing different
+     * files can never collide (unlike IDs derived from the clock).
+     */
+    public static String pointIdFor(String filename, int chunkIndex) {
+        String name = "documind:" + filename + "#" + chunkIndex;
+        return UUID.nameUUIDFromBytes(name.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+    
+    /**
      * Insert chunks with vectors into Qdrant (legacy method - no metadata)
-     * Calls the new method with "unknown" as filename for backwards compatibility.
+     * Calls the new method with "unknown" as filename for backwards compatibility,
+     * so repeated calls overwrite the same "unknown" points.
      */
     public void insertChunks(String collectionName, List<String> chunks, List<float[]> vectors) throws Exception {
         insertChunksWithMetadata(collectionName, chunks, vectors, "unknown");
@@ -269,12 +277,12 @@ public class QdrantService {
                     vectorList.add(v);
                 }
                 
-                // Use globally unique ID to avoid conflicts across uploads
-                long uniqueId = globalPointId.incrementAndGet();
+                // Deterministic ID: same file + chunk index -> same point (upsert overwrites)
+                String pointId = pointIdFor(filename, i);
                 
                 // Create point with ID, vector, and METADATA payload
                 PointStruct point = PointStruct.newBuilder()
-                    .setId(PointId.newBuilder().setNum(uniqueId).build())
+                    .setId(PointId.newBuilder().setUuid(pointId).build())
                     .setVectors(Vectors.newBuilder()
                         .setVector(io.qdrant.client.grpc.Points.Vector.newBuilder()
                             .addAllData(vectorList)
@@ -318,6 +326,9 @@ public class QdrantService {
                 }
             }
             
+            // A re-upload with fewer chunks leaves the old tail behind; remove it
+            deleteChunksFrom(collectionName, filename, chunks.size());
+            
             System.out.println("✅ [QDRANT] Successfully stored " + chunks.size() + " vectors from " + filename);
             log.info("Done inserting all {} chunks from {}", chunks.size(), filename);
             
@@ -325,6 +336,28 @@ public class QdrantService {
             log.error("Error inserting chunks from {} into {}: {}", filename, collectionName, e.getMessage(), e);
             throw e;
         }
+    }
+    
+    /**
+     * Delete the points of a file whose chunkIndex is >= firstStaleIndex
+     * (left over from an earlier, longer version of the same file).
+     */
+    private void deleteChunksFrom(String collectionName, String filename, int firstStaleIndex) throws Exception {
+        Filter staleChunks = Filter.newBuilder()
+            .addMust(Condition.newBuilder()
+                .setField(FieldCondition.newBuilder()
+                    .setKey("filename")
+                    .setMatch(Match.newBuilder().setKeyword(filename).build())
+                    .build())
+                .build())
+            .addMust(Condition.newBuilder()
+                .setField(FieldCondition.newBuilder()
+                    .setKey("chunkIndex")
+                    .setRange(Range.newBuilder().setGte(firstStaleIndex).build())
+                    .build())
+                .build())
+            .build();
+        client.deleteAsync(collectionName, staleChunks).get();
     }
     
     /**
@@ -359,6 +392,15 @@ public class QdrantService {
      * @throws Exception If search fails
      */
     public List<SearchResult> searchWithScores(String collectionName, float[] queryVector, int topK) throws Exception {
+        return searchWithScores(collectionName, queryVector, topK, null);
+    }
+    
+    /**
+     * Search with a minimum cosine score: points scoring below minScore are
+     * not returned (null = no threshold).
+     */
+    public List<SearchResult> searchWithScores(String collectionName, float[] queryVector, int topK,
+                                               Double minScore) throws Exception {
         try {
             System.out.println("🔎 [QDRANT] Searching collection '" + collectionName + "' for top " + topK + " results...");
             
@@ -373,17 +415,20 @@ public class QdrantService {
             
             log.debug("Query vector converted, starting async search...");
             
+            SearchPoints.Builder request = SearchPoints.newBuilder()
+                .setCollectionName(collectionName)
+                .addAllVector(queryVectorList)
+                .setLimit(topK)
+                .setWithPayload(WithPayloadSelector.newBuilder().setEnable(true).build());
+            if (minScore != null) {
+                request.setScoreThreshold(minScore.floatValue());
+            }
+            
             // Search in Qdrant with TIMEOUT to prevent infinite hangs
             List<ScoredPoint> results;
             try {
-                results = client.searchAsync(
-                    SearchPoints.newBuilder()
-                        .setCollectionName(collectionName)
-                        .addAllVector(queryVectorList)
-                        .setLimit(topK)
-                        .setWithPayload(WithPayloadSelector.newBuilder().setEnable(true).build())
-                        .build()
-                ).get(30, TimeUnit.SECONDS); // 30 second timeout!
+                results = client.searchAsync(request.build())
+                    .get(30, TimeUnit.SECONDS); // 30 second timeout!
             } catch (TimeoutException te) {
                 log.error("Qdrant search TIMED OUT after 30 seconds!");
                 throw new RuntimeException("Qdrant search timed out after 30 seconds", te);
@@ -569,7 +614,7 @@ public class QdrantService {
             return results;
         }
         
-        System.out.println("[RERANK] Keywords: " + queryWords);
+        System.out.println("[RERANK] Keywords extracted: " + queryWords.size());
         
         // Score each result by keyword matches
         List<java.util.Map.Entry<SearchResult, Integer>> scored = new ArrayList<>();

@@ -2,6 +2,7 @@ package com.northeastern.csye7374.finalproject.actors;
 
 import akka.actor.typed.ActorRef;
 import akka.actor.typed.Behavior;
+import akka.actor.typed.DispatcherSelector;
 import akka.actor.typed.javadsl.AbstractBehavior;
 import akka.actor.typed.javadsl.ActorContext;
 import akka.actor.typed.javadsl.Behaviors;
@@ -14,6 +15,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 
 /**
  * LLMActor - Handles LLM communication
@@ -81,12 +85,30 @@ public class LLMActor extends AbstractBehavior<LLMActor.Command> {
         }
     }
     
+    // Internal: OpenAI call finished on the blocking-io dispatcher
+    private static final class AnswerReady implements Command {
+        public final GenerateAnswer request;
+        public final String answer;        // null on failure
+        public final Throwable failure;    // null on success
+        public final long startTimeMs;
+        
+        public AnswerReady(GenerateAnswer request, String answer, Throwable failure, long startTimeMs) {
+            this.request = request;
+            this.answer = answer;
+            this.failure = failure;
+            this.startTimeMs = startTimeMs;
+        }
+    }
+    
     private final LLMService llmService;
     private final String nodeId;
+    private final Executor blockingExecutor;
     private LLMActor(ActorContext<Command> context, LLMService llmService, String nodeId) {
         super(context);
         this.llmService = llmService;
         this.nodeId = nodeId;
+        this.blockingExecutor = context.getSystem().dispatchers()
+            .lookup(DispatcherSelector.fromConfig(SearchWorkerActor.BLOCKING_DISPATCHER));
     }
     
     // Factory method - registers with Receptionist
@@ -116,6 +138,7 @@ public class LLMActor extends AbstractBehavior<LLMActor.Command> {
     public Receive<Command> createReceive() {
         return newReceiveBuilder()
             .onMessage(GenerateAnswer.class, this::onGenerateAnswer)
+            .onMessage(AnswerReady.class, this::onAnswerReady)
             .build();
     }
     
@@ -123,26 +146,42 @@ public class LLMActor extends AbstractBehavior<LLMActor.Command> {
     private Behavior<Command> onGenerateAnswer(GenerateAnswer cmd) {
         log.info("---");
         log.info("[LLM-ACTOR] [{}] Received GenerateAnswer", nodeId);
-        log.info("[LLM-ACTOR] Query: \"{}\"", 
-            cmd.query.substring(0, Math.min(50, cmd.query.length())) + "...");
+        log.info("[LLM-ACTOR] Query length: {} chars", cmd.query.length());
         log.info("[LLM-ACTOR] Context chunks: {}", cmd.contextChunks.size());
         
         // Console output
         System.out.println("---");
         System.out.println("[LLM-ACTOR] [" + nodeId + "] Received GenerateAnswer");
-        System.out.println("[LLM-ACTOR] Query: \"" + 
-            cmd.query.substring(0, Math.min(50, cmd.query.length())) + "...\"");
+        System.out.println("[LLM-ACTOR] Query length: " + cmd.query.length() + " chars");
         System.out.println("[LLM-ACTOR] Context chunks: " + cmd.contextChunks.size());
         
         long startTime = System.currentTimeMillis();
         
+        // Call LLM service on the blocking-io dispatcher; the actor stays free
+        // to accept the next request while OpenAI is working
+        System.out.println("[LLM-ACTOR] Calling OpenAI API...");
+        log.info("[LLM-ACTOR] Calling LLMService.generateAnswer()...");
+        
+        CompletableFuture<String> future = CompletableFuture.supplyAsync(
+            () -> llmService.generateAnswer(cmd.query, cmd.contextChunks), blockingExecutor);
+        getContext().pipeToSelf(future, (answer, failure) -> new AnswerReady(cmd, answer, failure, startTime));
+        
+        return this;
+    }
+    
+    // Reply once the OpenAI call has finished
+    private Behavior<Command> onAnswerReady(AnswerReady ready) {
+        GenerateAnswer cmd = ready.request;
+        
         try {
-            // Call LLM service
-            System.out.println("[LLM-ACTOR] Calling OpenAI API...");
-            log.info("[LLM-ACTOR] Calling LLMService.generateAnswer()...");
-            
-            String answer = llmService.generateAnswer(cmd.query, cmd.contextChunks);
-            double responseTimeSeconds = (System.currentTimeMillis() - startTime) / 1000.0;
+            if (ready.failure != null) {
+                // supplyAsync wraps the real error in a CompletionException
+                Throwable cause = ready.failure instanceof CompletionException && ready.failure.getCause() != null
+                    ? ready.failure.getCause() : ready.failure;
+                throw new RuntimeException(cause.getMessage(), cause);
+            }
+            String answer = ready.answer;
+            double responseTimeSeconds = (System.currentTimeMillis() - ready.startTimeMs) / 1000.0;
             
             log.info("[LLM-ACTOR] ✅ Response generated in {}s", responseTimeSeconds);
             System.out.println("[LLM-ACTOR] ✅ Response generated in " + 
@@ -155,7 +194,7 @@ public class LLMActor extends AbstractBehavior<LLMActor.Command> {
                 
                 cmd.loggingActor.tell(new LoggingActor.LogQuery(
                     cmd.query,
-                    answer.substring(0, Math.min(100, answer.length())) + "...",
+                    "(" + answer.length() + " chars)",  // never log the answer text
                     System.currentTimeMillis(),
                     nodeId
                 ));
@@ -185,8 +224,12 @@ public class LLMActor extends AbstractBehavior<LLMActor.Command> {
                 ));
             }
             
-            // Reply with error
-            cmd.replyTo.tell(new LLMResponse(e.getMessage(), nodeId));
+            // OpenAI still failing after LLMService's retries: fall back to the
+            // retrieved passages so the user still gets something useful
+            double responseTimeSeconds = (System.currentTimeMillis() - ready.startTimeMs) / 1000.0;
+            cmd.replyTo.tell(new LLMResponse(
+                LLMService.fallbackAnswer(cmd.contextChunks), responseTimeSeconds, nodeId));
+            System.out.println("[LLM-ACTOR] Replied with retrieved passages (fallback)");
             System.out.println("---");
         }
         

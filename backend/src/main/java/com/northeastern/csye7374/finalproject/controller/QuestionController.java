@@ -26,7 +26,6 @@ import java.util.concurrent.CompletionStage;
  */
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "*")
 public class QuestionController {
 
     private static final Logger log = LoggerFactory.getLogger(QuestionController.class);
@@ -34,6 +33,7 @@ public class QuestionController {
     private final ActorSystem<ClusterClientActor.Command> clusterClient;
     private static final Duration GET_ORCHESTRATOR_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration QUERY_TIMEOUT = Duration.ofSeconds(60);
+    static final int MAX_QUESTION_LENGTH = 1000; // characters
     @Autowired
     public QuestionController(ActorSystem<ClusterClientActor.Command> clusterClient) {
         this.clusterClient = clusterClient;
@@ -55,17 +55,28 @@ public class QuestionController {
     public CompletableFuture<ResponseEntity<Map<String, Object>>> askQuestion(
             @RequestBody Map<String, String> request) {
         
-        String question = request.get("question");
+        String question = request == null ? null : request.get("question");
         long startTime = System.currentTimeMillis();
         
+        // Validate before anything reaches the cluster or the LLM
+        String validationError = validateQuestion(question);
+        if (validationError != null) {
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("success", false);
+            errorResponse.put("error", validationError);
+            return CompletableFuture.completedFuture(ResponseEntity.badRequest().body(errorResponse));
+        }
+        question = question.trim();
+        final String validQuestion = question;
+        
         log.info("---");
-        log.info("[REST] Received: \"{}\"", question);
+        log.info("[REST] Received question ({} chars)", question.length());
         log.info("[REST] Mode: CLUSTER (via Akka actors)");
         log.info("[REST] Step 1: ASK ClusterClientActor for orchestrator...");
         
         System.out.println();
         System.out.println("---");
-        System.out.println("[REST] Received: \"" + question + "\"");
+        System.out.println("[REST] Received question (" + question.length() + " chars)");
         System.out.println("[REST] Mode: CLUSTER (via Akka actors)");
         System.out.println("[REST] Step 1: ASK ClusterClientActor for orchestrator...");
         System.out.println("---");
@@ -113,7 +124,7 @@ public class QuestionController {
             // This demonstrates the ASK pattern with request-response!
             return AskPattern.<OrchestratorActor.Command, OrchestratorActor.QueryResult>ask(
                 orchestrator,
-                replyTo -> new OrchestratorActor.ProcessQuery(question, replyTo),
+                replyTo -> new OrchestratorActor.ProcessQuery(validQuestion, replyTo),
                 QUERY_TIMEOUT,
                 clusterClient.scheduler()
             ).thenApply(result -> {
@@ -184,6 +195,17 @@ public class QuestionController {
             }).toCompletableFuture();
             
         }).toCompletableFuture();
+    }
+
+    // Returns an error message, or null when the question is acceptable
+    static String validateQuestion(String question) {
+        if (question == null || question.trim().isEmpty()) {
+            return "Question must not be empty.";
+        }
+        if (question.trim().length() > MAX_QUESTION_LENGTH) {
+            return "Question is too long (max " + MAX_QUESTION_LENGTH + " characters).";
+        }
+        return null;
     }
 
     /**

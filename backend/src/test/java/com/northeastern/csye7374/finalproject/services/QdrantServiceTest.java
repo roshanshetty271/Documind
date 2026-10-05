@@ -1,208 +1,187 @@
 package com.northeastern.csye7374.finalproject.services;
 
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Test class for QdrantService
- * 
- * Note: These tests require Qdrant to be running on localhost:6334
- * Start Qdrant with: docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
- * 
- * Tests are @Disabled by default to avoid failing in CI/CD without Qdrant
- * Remove @Disabled when running locally with Qdrant
+ * Integration tests for QdrantService against a real Qdrant started by
+ * Testcontainers. Skipped automatically when Docker is not available.
  */
-@Disabled("Requires Qdrant running on localhost:6334")
+@Testcontainers(disabledWithoutDocker = true)
 class QdrantServiceTest {
-    
+
+    // Same major/minor line as the io.qdrant:client version in the pom
+    @Container
+    private static final GenericContainer<?> QDRANT = new GenericContainer<>("qdrant/qdrant:v1.7.4")
+        .withExposedPorts(6333, 6334)
+        .waitingFor(Wait.forHttp("/").forPort(6333));
+
+    private static final int VECTOR_SIZE = 4;
+
     private QdrantService service;
-    private static final String TEST_COLLECTION = "test_collection";
-    private static final int VECTOR_SIZE = 100;
-    
+    private String collection;
+
     @BeforeEach
     void setUp() {
-        // Initialize service (connects to Qdrant)
-        service = new QdrantService();
+        service = new QdrantService(QDRANT.getHost(), QDRANT.getMappedPort(6334));
+        collection = "test_" + UUID.randomUUID().toString().replace("-", "");
     }
-    
+
     @AfterEach
     void tearDown() {
-        // Close connection
         service.close();
     }
-    
-    /**
-     * Test collection creation
-     * Verifies SAME logic from HW2
-     */
-    @Test
-    void testCreateCollection() throws Exception {
-        // Create collection
-        service.createCollection(TEST_COLLECTION, VECTOR_SIZE);
-        
-        // If no exception thrown, collection was created successfully
-        assertTrue(true, "Collection created successfully");
+
+    /** One-hot vector: makes the nearest neighbour of each query obvious. */
+    private static float[] axis(int i) {
+        float[] v = new float[VECTOR_SIZE];
+        v[i] = 1f;
+        return v;
     }
-    
-    /**
-     * Test chunking logic
-     * Verifies SAME 10-line chunking from HW2
-     */
-    @Test
-    void testReadAndChunkFile() throws IOException {
-        // Note: You'll need a test file to run this
-        // For now, test the chunking logic with a string array
-        
-        // Create a mock file reader test manually
-        List<String> mockLines = new ArrayList<>();
-        for (int i = 0; i < 25; i++) {
-            mockLines.add("Line " + i + " content");
-        }
-        
-        // Should create 3 chunks (0-9, 10-19, 20-24)
-        // Expected: 25 lines / 10 = 2 full chunks + 1 partial chunk
-        
-        // This test is conceptual - actual file reading requires a test file
-        assertTrue(true, "Chunking logic follows HW2 pattern (10 lines per chunk)");
-    }
-    
-    /**
-     * Test insertion of chunks with vectors
-     * Verifies SAME batch insertion from HW2 (batch size 50)
-     */
-    @Test
-    void testInsertChunks() throws Exception {
-        // Create collection first
-        service.createCollection(TEST_COLLECTION, VECTOR_SIZE);
-        
-        // Create sample chunks
-        List<String> chunks = new ArrayList<>();
-        chunks.add("This is chunk 1 about machine learning");
-        chunks.add("This is chunk 2 about artificial intelligence");
-        chunks.add("This is chunk 3 about neural networks");
-        
-        // Create sample vectors (random for testing)
+
+    private static List<float[]> axes(int count) {
         List<float[]> vectors = new ArrayList<>();
-        for (int i = 0; i < chunks.size(); i++) {
-            float[] vector = new float[VECTOR_SIZE];
-            for (int j = 0; j < VECTOR_SIZE; j++) {
-                vector[j] = (float) Math.random();
-            }
-            vectors.add(vector);
+        for (int i = 0; i < count; i++) {
+            vectors.add(axis(i));
         }
-        
-        // Insert chunks
-        service.insertChunks(TEST_COLLECTION, chunks, vectors);
-        
-        // If no exception thrown, insertion was successful
-        assertTrue(true, "Chunks inserted successfully");
+        return vectors;
     }
-    
-    /**
-     * Test search functionality
-     * Verifies SAME search logic from HW2 (top-K, cosine similarity)
-     */
+
     @Test
-    void testSearch() throws Exception {
-        // Create collection
-        service.createCollection(TEST_COLLECTION, VECTOR_SIZE);
-        
-        // Insert test data
-        List<String> chunks = new ArrayList<>();
-        chunks.add("Machine learning is a subset of AI");
-        chunks.add("Deep learning uses neural networks");
-        chunks.add("Natural language processing handles text");
-        
-        List<float[]> vectors = new ArrayList<>();
-        for (int i = 0; i < chunks.size(); i++) {
-            float[] vector = new float[VECTOR_SIZE];
-            for (int j = 0; j < VECTOR_SIZE; j++) {
-                vector[j] = (float) Math.random();
-            }
-            vectors.add(vector);
-        }
-        
-        service.insertChunks(TEST_COLLECTION, chunks, vectors);
-        
-        // Search with a query vector
-        float[] queryVector = new float[VECTOR_SIZE];
-        for (int i = 0; i < VECTOR_SIZE; i++) {
-            queryVector[i] = (float) Math.random();
-        }
-        
-        // Search for top 2 results
-        List<String> results = service.search(TEST_COLLECTION, queryVector, 2);
-        
-        // Verify results
-        assertNotNull(results, "Search results should not be null");
-        assertTrue(results.size() <= 2, "Should return at most 2 results");
+    void createCollectionMakesAnEmptySearchableCollection() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+
+        assertTrue(service.searchWithScores(collection, axis(0), 5).isEmpty());
     }
-    
-    /**
-     * Test search with scores
-     * Verifies extended search functionality
-     */
+
     @Test
-    void testSearchWithScores() throws Exception {
-        // Create collection
-        service.createCollection(TEST_COLLECTION, VECTOR_SIZE);
-        
-        // Insert test data
-        List<String> chunks = new ArrayList<>();
-        chunks.add("Vector databases store embeddings");
-        
-        List<float[]> vectors = new ArrayList<>();
-        float[] vector = new float[VECTOR_SIZE];
-        for (int i = 0; i < VECTOR_SIZE; i++) {
-            vector[i] = (float) Math.random();
-        }
-        vectors.add(vector);
-        
-        service.insertChunks(TEST_COLLECTION, chunks, vectors);
-        
-        // Search
-        float[] queryVector = new float[VECTOR_SIZE];
-        for (int i = 0; i < VECTOR_SIZE; i++) {
-            queryVector[i] = (float) Math.random();
-        }
-        
-        List<QdrantService.SearchResult> results = service.searchWithScores(TEST_COLLECTION, queryVector, 1);
-        
-        // Verify results
-        assertNotNull(results, "Search results should not be null");
-        if (!results.isEmpty()) {
-            QdrantService.SearchResult result = results.get(0);
-            assertNotNull(result.getText(), "Result text should not be null");
-            assertTrue(result.getScore() >= 0, "Score should be non-negative");
-        }
+    void createCollectionReplacesExistingData() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        service.insertChunks(collection, List.of("old chunk"), axes(1));
+
+        service.createCollection(collection, VECTOR_SIZE);
+
+        assertTrue(service.searchWithScores(collection, axis(0), 5).isEmpty());
     }
-    
-    /**
-     * Test that chunks and vectors size mismatch throws exception
-     */
+
     @Test
-    void testInsertChunksSizeMismatch() throws Exception {
-        service.createCollection(TEST_COLLECTION, VECTOR_SIZE);
-        
-        List<String> chunks = new ArrayList<>();
-        chunks.add("Chunk 1");
-        chunks.add("Chunk 2");
-        
-        List<float[]> vectors = new ArrayList<>();
-        vectors.add(new float[VECTOR_SIZE]); // Only one vector for two chunks
-        
-        // Should throw IllegalArgumentException
-        assertThrows(IllegalArgumentException.class, () -> {
-            service.insertChunks(TEST_COLLECTION, chunks, vectors);
-        });
+    void createCollectionIfNotExistsKeepsExistingCollection() throws Exception {
+        assertTrue(service.createCollectionIfNotExists(collection, VECTOR_SIZE));
+        service.insertChunks(collection, List.of("kept chunk"), axes(1));
+
+        assertFalse(service.createCollectionIfNotExists(collection, VECTOR_SIZE));
+        assertEquals(List.of("kept chunk"), service.search(collection, axis(0), 5));
+    }
+
+    @Test
+    void searchReturnsNearestChunksFirst() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        service.insertChunks(collection,
+            List.of("machine learning", "deep learning", "language processing"), axes(3));
+
+        List<String> results = service.search(collection, axis(1), 2);
+
+        assertEquals(2, results.size());
+        assertEquals("deep learning", results.get(0));
+    }
+
+    @Test
+    void searchWithScoresReturnsScoresAndMetadata() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        service.insertChunksWithMetadata(collection,
+            List.of("vector databases store embeddings", "actors exchange messages"), axes(2), "notes.txt");
+
+        List<QdrantService.SearchResult> results = service.searchWithScores(collection, axis(1), 2);
+
+        assertEquals(2, results.size());
+        QdrantService.SearchResult top = results.get(0);
+        assertEquals("actors exchange messages", top.getText());
+        assertEquals("notes.txt", top.getFilename());
+        assertEquals(1, top.getChunkIndex());
+        assertEquals(1.0f, top.getScore(), 1e-4);
+        assertEquals(0.0f, results.get(1).getScore(), 1e-4);
+        assertTrue(top.getScore() >= results.get(1).getScore(), "results must be sorted by score");
+    }
+
+    @Test
+    void searchWithFilterOnlyReturnsThatFile() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        service.insertChunksWithMetadata(collection, List.of("from a"), List.of(axis(0)), "a.txt");
+        service.insertChunksWithMetadata(collection, List.of("from b"), List.of(axis(0)), "b.txt");
+
+        List<QdrantService.SearchResult> results = service.searchWithFilter(collection, axis(0), 5, "b.txt");
+
+        assertEquals(1, results.size());
+        assertEquals("from b", results.get(0).getText());
+    }
+
+    @Test
+    void insertChunksRejectsSizeMismatch() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+
+        assertThrows(IllegalArgumentException.class,
+            () -> service.insertChunks(collection, List.of("Chunk 1", "Chunk 2"), axes(1)));
+    }
+
+    // ---- deterministic point IDs ----
+
+    @Test
+    void reuploadingAFileOverwritesInsteadOfDuplicating() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        List<String> chunks = List.of("chunk zero", "chunk one", "chunk two");
+
+        service.insertChunksWithMetadata(collection, chunks, axes(3), "lecture.txt");
+        service.insertChunksWithMetadata(collection, chunks, axes(3), "lecture.txt");
+
+        assertEquals(3, service.search(collection, axis(0), 100).size());
+    }
+
+    @Test
+    void shorterReuploadRemovesOldTailChunks() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        service.insertChunksWithMetadata(collection, List.of("v1 zero", "v1 one", "v1 two"), axes(3), "lecture.txt");
+
+        service.insertChunksWithMetadata(collection, List.of("v2 zero", "v2 one"), axes(2), "lecture.txt");
+
+        List<String> all = service.search(collection, axis(0), 100);
+        assertEquals(2, all.size());
+        assertTrue(all.containsAll(List.of("v2 zero", "v2 one")), all.toString());
+    }
+
+    @Test
+    void differentFilesDoNotOverwriteEachOther() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        service.insertChunksWithMetadata(collection, List.of("from a"), List.of(axis(0)), "a.txt");
+        service.insertChunksWithMetadata(collection, List.of("from b"), List.of(axis(0)), "b.txt");
+
+        assertEquals(2, service.search(collection, axis(0), 100).size());
+    }
+
+    // ---- relevance threshold ----
+
+    @Test
+    void minScoreDropsChunksBelowThreshold() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        service.insertChunks(collection, List.of("on topic", "off topic"),
+            List.of(axis(0), new float[] {0.3f, 1f, 0f, 0f}));
+
+        // cosine("on topic") = 1.0, cosine("off topic") ~= 0.29
+        List<QdrantService.SearchResult> all = service.searchWithScores(collection, axis(0), 5, null);
+        List<QdrantService.SearchResult> relevant = service.searchWithScores(collection, axis(0), 5, 0.5);
+
+        assertEquals(2, all.size());
+        assertEquals(1, relevant.size());
+        assertEquals("on topic", relevant.get(0).getText());
     }
 }
-
