@@ -29,12 +29,23 @@ class LLMServiceTest {
     }
 
     @Test
-    void promptSkipsBlankChunks() {
-        String prompt = LLMService.buildPrompt("q", Arrays.asList("real chunk", "   ", null));
+    void promptSkipsBlankChunksAndKeepsNumberingContiguous() {
+        String prompt = LLMService.buildPrompt("q", Arrays.asList("real chunk", "   ", null, "second chunk"));
 
         assertTrue(prompt.contains("[1] real chunk"));
-        assertFalse(prompt.contains("[2]"));
-        assertFalse(prompt.contains("[3]"));
+        assertTrue(prompt.contains("[2] second chunk"));
+        assertFalse(prompt.contains("\n[3] "), "only two passages should be numbered");
+    }
+
+    @Test
+    void promptRestrictsAnswerToContextAndAsksForCitations() {
+        String prompt = LLMService.buildPrompt("What is an actor?", List.of("Actors process messages."));
+
+        assertTrue(prompt.contains("Answer ONLY with information from the numbered context passages"), prompt);
+        assertTrue(prompt.contains("Do not use general knowledge"), prompt);
+        assertFalse(prompt.contains("you may use your general knowledge"), prompt);
+        assertTrue(prompt.contains("reply exactly: \"" + LLMService.NOT_FOUND_ANSWER + "\""), prompt);
+        assertTrue(prompt.contains("Cite the passages you used by number"), prompt);
     }
 
     @Test

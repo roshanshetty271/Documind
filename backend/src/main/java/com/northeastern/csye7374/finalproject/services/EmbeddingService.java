@@ -131,6 +131,22 @@ public class EmbeddingService {
     }
     
     /**
+     * True when the vector is all zeros, i.e. none of the words were in the
+     * Word2Vec vocabulary. Cosine similarity is undefined for such a vector.
+     */
+    public static boolean isZeroVector(float[] vector) {
+        if (vector == null) {
+            return true;
+        }
+        for (float v : vector) {
+            if (v != 0.0f) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    /**
      * Vectorize text using Word2Vec (with vocabulary map for API compatibility)
      * 
      * @param text Text to vectorize

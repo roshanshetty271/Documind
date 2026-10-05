@@ -21,6 +21,9 @@ public class LLMService {
     
     private final ChatModel chatModel;
     
+    // Exact reply the model must give when the passages do not contain the answer
+    public static final String NOT_FOUND_ANSWER = "I could not find the answer in the uploaded documents.";
+    
     // Default model settings
     private static final String DEFAULT_MODEL = "gpt-3.5-turbo";
     private static final double DEFAULT_TEMPERATURE = 0.7;
@@ -108,9 +111,10 @@ public class LLMService {
     
     /**
      * Build RAG prompt with context chunks and query
-     * Format: Instructions + Context sections + Question
+     * Format: Instructions + numbered context passages + Question
      * 
-     * IMPROVED: Better handling of context relevance and fallback to general knowledge
+     * The model must answer only from the passages, say NOT_FOUND_ANSWER when
+     * they do not contain the answer, and cite passages by number.
      * 
      * @param query User question
      * @param contextChunks Retrieved context from vector DB
@@ -120,29 +124,33 @@ public class LLMService {
         StringBuilder prompt = new StringBuilder();
         
         // System instruction
-        prompt.append("You are a helpful assistant answering questions based on provided documents.\n\n");
+        prompt.append("You are a question-answering assistant for the user's uploaded documents.\n\n");
         
-        // Clear instructions for better answers
-        prompt.append("INSTRUCTIONS:\n");
-        prompt.append("1. Use the context below as your primary source of information\n");
-        prompt.append("2. If the context contains relevant information, base your answer on it\n");
-        prompt.append("3. If the context is not relevant or insufficient, you may use your general knowledge\n");
-        prompt.append("4. Be concise and accurate\n");
-        prompt.append("5. Do not make up information that contradicts the context\n\n");
+        // Grounding rules: context only, explicit "not found", citations
+        prompt.append("RULES:\n");
+        prompt.append("1. Answer ONLY with information from the numbered context passages below. ");
+        prompt.append("Do not use general knowledge or anything that is not in these passages.\n");
+        prompt.append("2. If the passages do not contain the answer, reply exactly: \"")
+              .append(NOT_FOUND_ANSWER).append("\"\n");
+        prompt.append("3. Cite the passages you used by number in square brackets after each statement, ");
+        prompt.append("for example [1] or [2][3].\n");
+        prompt.append("4. Be concise and accurate.\n\n");
         
-        // Context section with clear formatting
-        prompt.append("CONTEXT FROM DOCUMENTS:\n");
+        // Context section with numbered passages
+        prompt.append("CONTEXT PASSAGES:\n");
         prompt.append("─────────────────────────\n");
         
-        if (contextChunks == null || contextChunks.isEmpty()) {
-            prompt.append("[No relevant documents found]\n");
-        } else {
-            for (int i = 0; i < contextChunks.size(); i++) {
-                String chunk = contextChunks.get(i);
+        int number = 0;
+        if (contextChunks != null) {
+            for (String chunk : contextChunks) {
                 if (chunk != null && !chunk.trim().isEmpty()) {
-                    prompt.append("[").append(i + 1).append("] ").append(chunk.trim()).append("\n\n");
+                    number++;
+                    prompt.append("[").append(number).append("] ").append(chunk.trim()).append("\n\n");
                 }
             }
+        }
+        if (number == 0) {
+            prompt.append("[No relevant documents found]\n");
         }
         
         prompt.append("─────────────────────────\n\n");
@@ -153,7 +161,7 @@ public class LLMService {
         
         String promptText = prompt.toString();
         log.debug("Built prompt with {} context chunks, total length: {} characters", 
-            contextChunks.size(), promptText.length());
+            number, promptText.length());
         
         return promptText;
     }

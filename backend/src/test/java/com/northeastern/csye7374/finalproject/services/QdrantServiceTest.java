@@ -167,4 +167,21 @@ class QdrantServiceTest {
 
         assertEquals(2, service.search(collection, axis(0), 100).size());
     }
+
+    // ---- relevance threshold ----
+
+    @Test
+    void minScoreDropsChunksBelowThreshold() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        service.insertChunks(collection, List.of("on topic", "off topic"),
+            List.of(axis(0), new float[] {0.3f, 1f, 0f, 0f}));
+
+        // cosine("on topic") = 1.0, cosine("off topic") ~= 0.29
+        List<QdrantService.SearchResult> all = service.searchWithScores(collection, axis(0), 5, null);
+        List<QdrantService.SearchResult> relevant = service.searchWithScores(collection, axis(0), 5, 0.5);
+
+        assertEquals(2, all.size());
+        assertEquals(1, relevant.size());
+        assertEquals("on topic", relevant.get(0).getText());
+    }
 }

@@ -66,10 +66,14 @@ public class SearchWorkerActor extends AbstractBehavior<SearchWorkerActor.Comman
     // Dispatcher for blocking calls (defined in application.conf)
     public static final String BLOCKING_DISPATCHER = "documind.blocking-io-dispatcher";
     
+    // Minimum cosine score for a chunk to count as relevant (documind.search.min-score)
+    private static final double DEFAULT_MIN_SCORE = 0.3;
+    
     private final QdrantService qdrantService;
     private final EmbeddingService embeddingService;
     private final String collectionName;
     private final Executor blockingExecutor;
+    private final double minScore;
     private SearchWorkerActor(ActorContext<Command> context, String collectionName,
                               EmbeddingService embeddingService, QdrantService qdrantService) {
         super(context);
@@ -78,6 +82,9 @@ public class SearchWorkerActor extends AbstractBehavior<SearchWorkerActor.Comman
         this.qdrantService = qdrantService;
         this.blockingExecutor = context.getSystem().dispatchers()
             .lookup(DispatcherSelector.fromConfig(BLOCKING_DISPATCHER));
+        com.typesafe.config.Config config = context.getSystem().settings().config();
+        this.minScore = config.hasPath("documind.search.min-score")
+            ? config.getDouble("documind.search.min-score") : DEFAULT_MIN_SCORE;
         
         log.info("SearchWorkerActor initialized for collection: {}", collectionName);
     }
@@ -159,9 +166,16 @@ public class SearchWorkerActor extends AbstractBehavior<SearchWorkerActor.Comman
             
             log.debug("Query vectorized: {} dimensions", queryVector.length);
             
-            // Search Qdrant
+            // No known words: the vector is all zeros and cosine similarity is
+            // meaningless, so report "no relevant content" instead of searching
+            if (EmbeddingService.isZeroVector(queryVector)) {
+                log.info("Query has no words in the embedding vocabulary, skipping search");
+                return new SearchResponse(new ArrayList<>(), new ArrayList<>());
+            }
+            
+            // Search Qdrant, dropping chunks below the relevance threshold
             List<QdrantService.SearchResult> searchResults = 
-                qdrantService.searchWithScores(collectionName, queryVector, topK);
+                qdrantService.searchWithScores(collectionName, queryVector, topK, minScore);
             
             log.info("Search completed: {} results found", searchResults.size());
             

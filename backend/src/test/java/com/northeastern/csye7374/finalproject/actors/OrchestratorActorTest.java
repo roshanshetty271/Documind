@@ -218,4 +218,34 @@ class OrchestratorActorTest {
             assertEquals("Node-good", result.llmNodeId);
         }
     }
+
+    // ---- no relevant content ----
+
+    @Test
+    void emptySearchResultAnswersNoRelevantContentWithoutCallingLlm() {
+        spawnRegistered(Behaviors.<SearchWorkerActor.Command>receiveMessage(cmd -> {
+            SearchWorkerActor.SearchCommand search = (SearchWorkerActor.SearchCommand) cmd;
+            search.replyTo.tell(new SearchResponse(List.of(), List.of()));
+            return Behaviors.same();
+        }), SearchWorkerActor.SEARCH_WORKER_KEY);
+        TestProbe<LLMActor.Command> llm = testKit.createTestProbe();
+        TestProbe<Receptionist.Registered> ack = testKit.createTestProbe();
+        testKit.system().receptionist().tell(Receptionist.register(LLMActor.SERVICE_KEY, llm.getRef(), ack.getRef()));
+        ack.receiveMessage();
+        ActorRef<OrchestratorActor.Command> orchestrator =
+            testKit.spawn(OrchestratorActor.create("Node-test"), "orchestrator");
+
+        TestProbe<OrchestratorActor.QueryResult> caller = testKit.createTestProbe();
+        OrchestratorActor.QueryResult result;
+        long deadline = System.currentTimeMillis() + 5_000;
+        do {
+            orchestrator.tell(new OrchestratorActor.ProcessQuery("zzqx qqzx", caller.getRef()));
+            result = caller.receiveMessage(Duration.ofSeconds(3));
+        } while (!result.success && System.currentTimeMillis() < deadline);
+
+        assertTrue(result.success, String.valueOf(result.errorMessage));
+        assertEquals(OrchestratorActor.NO_RELEVANT_CONTENT, result.answer);
+        assertEquals(0, result.chunksFound);
+        llm.expectNoMessage(Duration.ofMillis(200));
+    }
 }

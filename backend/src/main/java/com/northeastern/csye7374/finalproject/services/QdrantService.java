@@ -392,6 +392,15 @@ public class QdrantService {
      * @throws Exception If search fails
      */
     public List<SearchResult> searchWithScores(String collectionName, float[] queryVector, int topK) throws Exception {
+        return searchWithScores(collectionName, queryVector, topK, null);
+    }
+    
+    /**
+     * Search with a minimum cosine score: points scoring below minScore are
+     * not returned (null = no threshold).
+     */
+    public List<SearchResult> searchWithScores(String collectionName, float[] queryVector, int topK,
+                                               Double minScore) throws Exception {
         try {
             System.out.println("🔎 [QDRANT] Searching collection '" + collectionName + "' for top " + topK + " results...");
             
@@ -406,17 +415,20 @@ public class QdrantService {
             
             log.debug("Query vector converted, starting async search...");
             
+            SearchPoints.Builder request = SearchPoints.newBuilder()
+                .setCollectionName(collectionName)
+                .addAllVector(queryVectorList)
+                .setLimit(topK)
+                .setWithPayload(WithPayloadSelector.newBuilder().setEnable(true).build());
+            if (minScore != null) {
+                request.setScoreThreshold(minScore.floatValue());
+            }
+            
             // Search in Qdrant with TIMEOUT to prevent infinite hangs
             List<ScoredPoint> results;
             try {
-                results = client.searchAsync(
-                    SearchPoints.newBuilder()
-                        .setCollectionName(collectionName)
-                        .addAllVector(queryVectorList)
-                        .setLimit(topK)
-                        .setWithPayload(WithPayloadSelector.newBuilder().setEnable(true).build())
-                        .build()
-                ).get(30, TimeUnit.SECONDS); // 30 second timeout!
+                results = client.searchAsync(request.build())
+                    .get(30, TimeUnit.SECONDS); // 30 second timeout!
             } catch (TimeoutException te) {
                 log.error("Qdrant search TIMED OUT after 30 seconds!");
                 throw new RuntimeException("Qdrant search timed out after 30 seconds", te);

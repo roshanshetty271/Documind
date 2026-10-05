@@ -71,7 +71,8 @@ class BlockingDispatcherTest {
         }
 
         @Override
-        public List<SearchResult> searchWithScores(String collectionName, float[] queryVector, int topK) throws Exception {
+        public List<SearchResult> searchWithScores(String collectionName, float[] queryVector, int topK,
+                                                   Double minScore) throws Exception {
             threads.add(Thread.currentThread().getName());
             allInside.countDown();
             if (!allInside.await(5, TimeUnit.SECONDS)) {

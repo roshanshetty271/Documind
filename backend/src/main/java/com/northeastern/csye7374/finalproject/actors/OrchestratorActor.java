@@ -159,6 +159,9 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
         }
     }
     
+    // Answer when no chunk passes the relevance threshold
+    public static final String NO_RELEVANT_CONTENT = "No relevant content found in the uploaded documents.";
+    
     private final String nodeId;
     
     // Per-step timeouts (documind.orchestrator.* in application.conf). A step that
@@ -453,7 +456,7 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
             if (searchResponse.getChunks().isEmpty()) {
                 long responseTime = System.currentTimeMillis() - command.startTimeMs;
                 command.replyTo.tell(new QueryResult(
-                    "No relevant information found in the course materials.",
+                    NO_RELEVANT_CONTENT,
                     command.workerPath, nodeId, 0, responseTime, searchWorkers.size()
                 ));
                 return this;
