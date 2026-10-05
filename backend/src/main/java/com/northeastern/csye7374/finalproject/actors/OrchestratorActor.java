@@ -15,6 +15,7 @@ import com.northeastern.csye7374.finalproject.messages.*;
 import com.northeastern.csye7374.finalproject.services.LLMService;
 
 import java.io.Serializable;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -62,17 +63,20 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
         }
     }
     
-    // Internal message when search completes
+    // Internal message when search completes (or fails/times out).
+    // Built per request by context.ask, so it always carries the caller of THIS query.
     private static final class SearchCompleted implements Command {
-        public final SearchResponse searchResponse;
+        public final SearchResponse searchResponse;   // null when the ask failed
+        public final Throwable failure;               // null on success
         public final String originalQuery;
-            public final ActorRef<QueryResult> replyTo;
-            public final String workerPath;
+        public final ActorRef<QueryResult> replyTo;
+        public final String workerPath;
         public final long startTimeMs;
         
-        public SearchCompleted(SearchResponse searchResponse, String originalQuery, 
+        public SearchCompleted(SearchResponse searchResponse, Throwable failure, String originalQuery, 
                               ActorRef<QueryResult> replyTo, String workerPath, long startTimeMs) {
             this.searchResponse = searchResponse;
+            this.failure = failure;
             this.originalQuery = originalQuery;
             this.replyTo = replyTo;
             this.workerPath = workerPath;
@@ -80,17 +84,19 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
         }
     }
     
-    // Internal message when LLM finishes
+    // Internal message when LLM finishes (or fails/times out), built per request by context.ask
     private static final class LLMCompleted implements Command {
-        public final LLMActor.LLMResponse llmResponse;
-            public final ActorRef<QueryResult> originalReplyTo;
+        public final LLMActor.LLMResponse llmResponse;   // null when the ask failed
+        public final Throwable failure;                  // null on success
+        public final ActorRef<QueryResult> originalReplyTo;
         public final String workerPath;
         public final int chunksFound;
         public final long startTimeMs;
         
-        public LLMCompleted(LLMActor.LLMResponse llmResponse, ActorRef<QueryResult> originalReplyTo,
+        public LLMCompleted(LLMActor.LLMResponse llmResponse, Throwable failure, ActorRef<QueryResult> originalReplyTo,
                           String workerPath, int chunksFound, long startTimeMs) {
             this.llmResponse = llmResponse;
+            this.failure = failure;
             this.originalReplyTo = originalReplyTo;
             this.workerPath = workerPath;
             this.chunksFound = chunksFound;
@@ -142,6 +148,9 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
     }
     
     private final String nodeId;
+    
+    // How long a single pipeline step may take before the caller gets an error
+    private static final Duration STEP_TIMEOUT = Duration.ofSeconds(30);
     
     // Discovered actors from all nodes
     private List<ActorRef<SearchWorkerActor.Command>> searchWorkers = new ArrayList<>();
@@ -298,31 +307,32 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
             String workerPath = selectedWorker.path().toString();
             
             log.info("[ORCHESTRATOR] Selected worker: {}", workerPath);
-            log.info("[ORCHESTRATOR] TELL → SearchWorkerActor (with response adapter)");
-            System.out.println("[ORCHESTRATOR] TELL → SearchWorkerActor: " + workerPath);
+            log.info("[ORCHESTRATOR] ASK → SearchWorkerActor (per-request reply)");
+            System.out.println("[ORCHESTRATOR] ASK → SearchWorkerActor: " + workerPath);
             
             // Build search query
             SearchQuery searchQuery = new SearchQuery(command.query, 5); // top-5 results
             
-            // Adapter preserves original replyTo
+            // context.ask creates a fresh reply ref for this request only, so the
+            // response is mapped with THIS query's replyTo even when several
+            // queries are in flight (a shared messageAdapter would be replaced
+            // by the next query and cross the replies).
             final String finalWorkerPath = workerPath;
             final long finalStartTime = startTime;
-            ActorRef<SearchResponse> responseAdapter = getContext().messageAdapter(
+            getContext().ask(
                 SearchResponse.class,
-                response -> new SearchCompleted(
-                    response, 
+                selectedWorker,
+                STEP_TIMEOUT,
+                replyTo -> new SearchWorkerActor.SearchCommand(searchQuery, replyTo),
+                (response, failure) -> new SearchCompleted(
+                    response,
+                    failure,
                     command.query, 
                     command.replyTo,
                     finalWorkerPath, 
                     finalStartTime
                 )
             );
-            
-            // TELL to worker
-            SearchWorkerActor.SearchCommand searchCommand = 
-                new SearchWorkerActor.SearchCommand(searchQuery, responseAdapter);
-            
-            selectedWorker.tell(searchCommand);
             
         } catch (Exception e) {
             log.error("[ORCHESTRATOR] Error processing query: {}", e.getMessage(), e);
@@ -334,6 +344,11 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
     
     // Forward to LLMActor for answer generation
     private Behavior<Command> onSearchCompleted(SearchCompleted command) {
+        if (command.failure != null) {
+            log.error("[ORCHESTRATOR] Search step failed on {}: {}", command.workerPath, command.failure.getMessage());
+            command.replyTo.tell(QueryResult.error("Search failed: " + command.failure.getMessage()));
+            return this;
+        }
         SearchResponse searchResponse = command.searchResponse;
         int chunksFound = searchResponse.isSuccess() ? searchResponse.getChunks().size() : 0;
         
@@ -395,34 +410,36 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
             System.out.println("[ORCHESTRATOR] FORWARD → LLMActor: " + selectedLLMActor.path());
             System.out.println("[ORCHESTRATOR] (replyTo preserved for response routing)");
             
-            // Adapter preserves replyTo
+            // Per-request reply ref carries the original replyTo for this query only
             final ActorRef<QueryResult> originalReplyTo = command.replyTo;
             final String finalWorkerPath = command.workerPath;
             final int finalChunksFound = chunksFound;
             final long finalStartTime = command.startTimeMs;
             
-            ActorRef<LLMActor.LLMResponse> llmResponseAdapter = getContext().messageAdapter(
+            // Pass logger to LLMActor
+            ActorRef<LoggingActor.Command> loggerForLLM = 
+                loggingActors.isEmpty() ? null : loggingActors.get(0);
+            
+            // Send to LLM; it replies straight to the per-request ref (FORWARD of replyTo)
+            getContext().ask(
                 LLMActor.LLMResponse.class,
-                response -> new LLMCompleted(
+                selectedLLMActor,
+                STEP_TIMEOUT,
+                replyTo -> new LLMActor.GenerateAnswer(
+                    command.originalQuery,
+                    searchResponse.getChunks(),
+                    replyTo,
+                    loggerForLLM
+                ),
+                (response, failure) -> new LLMCompleted(
                     response,
+                    failure,
                     originalReplyTo,
                     finalWorkerPath,
                     finalChunksFound,
                     finalStartTime
                 )
             );
-            
-            // Pass logger to LLMActor
-            ActorRef<LoggingActor.Command> loggerForLLM = 
-                loggingActors.isEmpty() ? null : loggingActors.get(0);
-            
-            // Send to LLM
-            selectedLLMActor.tell(new LLMActor.GenerateAnswer(
-                command.originalQuery,
-                searchResponse.getChunks(),
-                llmResponseAdapter,
-                loggerForLLM
-            ));
             
         } catch (Exception e) {
             log.error("[ORCHESTRATOR] Error in search completion: {}", e.getMessage(), e);
@@ -434,6 +451,11 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
     
     // Reply to original sender
     private Behavior<Command> onLLMCompleted(LLMCompleted command) {
+        if (command.failure != null) {
+            log.error("[ORCHESTRATOR] LLM step failed: {}", command.failure.getMessage());
+            command.originalReplyTo.tell(QueryResult.error("Answer generation failed: " + command.failure.getMessage()));
+            return this;
+        }
         log.info("---");
         log.info("[ORCHESTRATOR] [{}] LLM response received", nodeId);
         log.info("[ORCHESTRATOR] Success: {}", command.llmResponse.success);
