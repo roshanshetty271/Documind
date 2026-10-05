@@ -116,7 +116,7 @@ public class LLMService {
      * @param contextChunks Retrieved context from vector DB
      * @return Formatted prompt string
      */
-    private String buildPrompt(String query, List<String> contextChunks) {
+    static String buildPrompt(String query, List<String> contextChunks) {
         StringBuilder prompt = new StringBuilder();
         
         // System instruction
