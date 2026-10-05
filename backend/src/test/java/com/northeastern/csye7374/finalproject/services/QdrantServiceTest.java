@@ -133,4 +133,38 @@ class QdrantServiceTest {
         assertThrows(IllegalArgumentException.class,
             () -> service.insertChunks(collection, List.of("Chunk 1", "Chunk 2"), axes(1)));
     }
+
+    // ---- deterministic point IDs ----
+
+    @Test
+    void reuploadingAFileOverwritesInsteadOfDuplicating() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        List<String> chunks = List.of("chunk zero", "chunk one", "chunk two");
+
+        service.insertChunksWithMetadata(collection, chunks, axes(3), "lecture.txt");
+        service.insertChunksWithMetadata(collection, chunks, axes(3), "lecture.txt");
+
+        assertEquals(3, service.search(collection, axis(0), 100).size());
+    }
+
+    @Test
+    void shorterReuploadRemovesOldTailChunks() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        service.insertChunksWithMetadata(collection, List.of("v1 zero", "v1 one", "v1 two"), axes(3), "lecture.txt");
+
+        service.insertChunksWithMetadata(collection, List.of("v2 zero", "v2 one"), axes(2), "lecture.txt");
+
+        List<String> all = service.search(collection, axis(0), 100);
+        assertEquals(2, all.size());
+        assertTrue(all.containsAll(List.of("v2 zero", "v2 one")), all.toString());
+    }
+
+    @Test
+    void differentFilesDoNotOverwriteEachOther() throws Exception {
+        service.createCollection(collection, VECTOR_SIZE);
+        service.insertChunksWithMetadata(collection, List.of("from a"), List.of(axis(0)), "a.txt");
+        service.insertChunksWithMetadata(collection, List.of("from b"), List.of(axis(0)), "b.txt");
+
+        assertEquals(2, service.search(collection, axis(0), 100).size());
+    }
 }

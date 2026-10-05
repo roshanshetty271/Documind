@@ -127,4 +127,16 @@ class QdrantServiceUnitTest {
         List<QdrantService.SearchResult> single = List.of(result("only one", 0.1f));
         assertSame(single, service.rerankByKeywords("anything", single));
     }
+
+    // ---- deterministic point IDs ----
+
+    @Test
+    void pointIdIsStableUuidPerFileAndChunk() {
+        String id = QdrantService.pointIdFor("lecture.pdf", 3);
+
+        assertEquals(id, QdrantService.pointIdFor("lecture.pdf", 3));
+        assertEquals(id, java.util.UUID.fromString(id).toString(), "must be a valid UUID");
+        assertNotEquals(id, QdrantService.pointIdFor("lecture.pdf", 4));
+        assertNotEquals(id, QdrantService.pointIdFor("other.pdf", 3));
+    }
 }

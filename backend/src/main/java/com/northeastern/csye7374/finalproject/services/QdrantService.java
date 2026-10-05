@@ -15,7 +15,6 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Qdrant Vector Database Service
@@ -29,9 +28,6 @@ public class QdrantService {
     
     private QdrantClient client;
     private static final int DEFAULT_BATCH_SIZE = 50;
-    
-    // Global counter for unique point IDs
-    private static final AtomicLong globalPointId = new AtomicLong(System.currentTimeMillis());
     
     /**
      * Constructor - Initialize Qdrant client
@@ -218,8 +214,20 @@ public class QdrantService {
     }
     
     /**
+     * Deterministic point ID for a chunk: a name-based (v3) UUID of
+     * filename + chunk index. Re-uploading the same file overwrites its
+     * points instead of duplicating them, and two JVMs indexing different
+     * files can never collide (unlike IDs derived from the clock).
+     */
+    public static String pointIdFor(String filename, int chunkIndex) {
+        String name = "documind:" + filename + "#" + chunkIndex;
+        return UUID.nameUUIDFromBytes(name.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+    
+    /**
      * Insert chunks with vectors into Qdrant (legacy method - no metadata)
-     * Calls the new method with "unknown" as filename for backwards compatibility.
+     * Calls the new method with "unknown" as filename for backwards compatibility,
+     * so repeated calls overwrite the same "unknown" points.
      */
     public void insertChunks(String collectionName, List<String> chunks, List<float[]> vectors) throws Exception {
         insertChunksWithMetadata(collectionName, chunks, vectors, "unknown");
@@ -269,12 +277,12 @@ public class QdrantService {
                     vectorList.add(v);
                 }
                 
-                // Use globally unique ID to avoid conflicts across uploads
-                long uniqueId = globalPointId.incrementAndGet();
+                // Deterministic ID: same file + chunk index -> same point (upsert overwrites)
+                String pointId = pointIdFor(filename, i);
                 
                 // Create point with ID, vector, and METADATA payload
                 PointStruct point = PointStruct.newBuilder()
-                    .setId(PointId.newBuilder().setNum(uniqueId).build())
+                    .setId(PointId.newBuilder().setUuid(pointId).build())
                     .setVectors(Vectors.newBuilder()
                         .setVector(io.qdrant.client.grpc.Points.Vector.newBuilder()
                             .addAllData(vectorList)
@@ -318,6 +326,9 @@ public class QdrantService {
                 }
             }
             
+            // A re-upload with fewer chunks leaves the old tail behind; remove it
+            deleteChunksFrom(collectionName, filename, chunks.size());
+            
             System.out.println("✅ [QDRANT] Successfully stored " + chunks.size() + " vectors from " + filename);
             log.info("Done inserting all {} chunks from {}", chunks.size(), filename);
             
@@ -325,6 +336,28 @@ public class QdrantService {
             log.error("Error inserting chunks from {} into {}: {}", filename, collectionName, e.getMessage(), e);
             throw e;
         }
+    }
+    
+    /**
+     * Delete the points of a file whose chunkIndex is >= firstStaleIndex
+     * (left over from an earlier, longer version of the same file).
+     */
+    private void deleteChunksFrom(String collectionName, String filename, int firstStaleIndex) throws Exception {
+        Filter staleChunks = Filter.newBuilder()
+            .addMust(Condition.newBuilder()
+                .setField(FieldCondition.newBuilder()
+                    .setKey("filename")
+                    .setMatch(Match.newBuilder().setKeyword(filename).build())
+                    .build())
+                .build())
+            .addMust(Condition.newBuilder()
+                .setField(FieldCondition.newBuilder()
+                    .setKey("chunkIndex")
+                    .setRange(Range.newBuilder().setGte(firstStaleIndex).build())
+                    .build())
+                .build())
+            .build();
+        client.deleteAsync(collectionName, staleChunks).get();
     }
     
     /**
