@@ -30,6 +30,7 @@ public final class SearchQuery implements Serializable {
     
     @Override
     public String toString() {
-        return "SearchQuery{query='" + query + "', topK=" + topK + "}";
+        // Length only, so logging this message never writes the question text
+        return "SearchQuery{queryLength=" + (query != null ? query.length() : 0) + ", topK=" + topK + "}";
     }
 }

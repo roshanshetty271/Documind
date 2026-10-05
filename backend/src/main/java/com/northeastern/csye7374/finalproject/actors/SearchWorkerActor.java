@@ -159,7 +159,7 @@ public class SearchWorkerActor extends AbstractBehavior<SearchWorkerActor.Comman
             String queryText = searchQuery.getQuery();
             int topK = searchQuery.getTopK();
             
-            log.debug("Processing search query: '{}', topK: {}", queryText, topK);
+            log.debug("Processing search query ({} chars), topK: {}", queryText.length(), topK);
             
             // Vectorize query
             float[] queryVector = embeddingService.vectorize(queryText, null);

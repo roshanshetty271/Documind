@@ -105,4 +105,23 @@ class FileUploadControllerTest {
         assertEquals(400, controller(false).uploadFile(empty).getStatusCode().value());
         assertEquals(400, controller(false).uploadFile(wrongType).getStatusCode().value());
     }
+
+    @Test
+    void pdfOverPageLimitIsRejected() throws Exception {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (org.apache.pdfbox.pdmodel.PDDocument doc = new org.apache.pdfbox.pdmodel.PDDocument()) {
+            for (int i = 0; i <= FileUploadController.MAX_PDF_PAGES; i++) {
+                doc.addPage(new org.apache.pdfbox.pdmodel.PDPage());
+            }
+            doc.save(bytes);
+        }
+        MockMultipartFile pdf = new MockMultipartFile("file", "huge.pdf", "application/pdf", bytes.toByteArray());
+
+        ResponseEntity<Map<String, Object>> response = controller(false).uploadFile(pdf);
+
+        assertEquals(400, response.getStatusCode().value());
+        assertTrue(String.valueOf(response.getBody().get("error")).contains("Max pages"),
+            String.valueOf(response.getBody().get("error")));
+        assertTrue(qdrant.inserted.isEmpty());
+    }
 }

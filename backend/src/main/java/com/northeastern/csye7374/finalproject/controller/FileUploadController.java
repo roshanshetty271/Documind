@@ -26,7 +26,6 @@ import java.util.*;
  */
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "*")
 public class FileUploadController {
 
     private static final Logger log = LoggerFactory.getLogger(FileUploadController.class);
@@ -38,6 +37,7 @@ public class FileUploadController {
     private static final int WINDOW_SIZE = 5;      // 5 sentences per chunk
     private static final int SLIDE_STEP = 2;       // 60% overlap
     static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB (also set in application.properties)
+    static final int MAX_PDF_PAGES = 300;
 
     // Constructor
     public FileUploadController() {
@@ -192,6 +192,11 @@ public class FileUploadController {
      */
     private String extractTextFromPDF(MultipartFile file) throws IOException {
         try (PDDocument document = PDDocument.load(file.getInputStream())) {
+            // Page limit keeps one upload from tying up extraction and embedding
+            if (document.getNumberOfPages() > MAX_PDF_PAGES) {
+                throw new IllegalArgumentException("PDF has " + document.getNumberOfPages()
+                    + " pages. Max pages: " + MAX_PDF_PAGES);
+            }
             PDFTextStripper stripper = new PDFTextStripper();
             stripper.setSortByPosition(true);
             return stripper.getText(document);
@@ -274,6 +279,7 @@ public class FileUploadController {
         health.put("status", "UP");
         health.put("service", "FileUploadController");
         health.put("maxFileSize", "10MB");
+        health.put("maxPdfPages", MAX_PDF_PAGES);
         health.put("supportedFormats", Arrays.asList("PDF", "TXT"));
         health.put("metadataTracking", true);
         return health;

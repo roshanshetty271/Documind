@@ -295,13 +295,11 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
         
         log.info("---");
         log.info("[ORCHESTRATOR] [{}] Received ProcessQuery", nodeId);
-        log.info("[ORCHESTRATOR] Query: \"{}\"", 
-            command.query.substring(0, Math.min(50, command.query.length())) + "...");
+        log.info("[ORCHESTRATOR] Query length: {} chars", command.query.length());
         
         System.out.println("---");
         System.out.println("[ORCHESTRATOR] [" + nodeId + "] Received ProcessQuery");
-        System.out.println("[ORCHESTRATOR] Query: \"" + 
-            command.query.substring(0, Math.min(50, command.query.length())) + "...\"");
+        System.out.println("[ORCHESTRATOR] Query length: " + command.query.length() + " chars");
         
         // TELL to logger (fire-and-forget)
         if (!loggingActors.isEmpty()) {
@@ -311,7 +309,7 @@ public class OrchestratorActor extends AbstractBehavior<OrchestratorActor.Comman
             
             logger.tell(new LoggingActor.LogEntry(
                 "QUERY_RECEIVED",
-                "Received query: " + command.query.substring(0, Math.min(50, command.query.length())) + "...",
+                "Received query (" + command.query.length() + " chars)",
                 System.currentTimeMillis(),
                 nodeId
             ));

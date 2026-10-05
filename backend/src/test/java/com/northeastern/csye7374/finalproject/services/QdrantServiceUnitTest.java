@@ -139,4 +139,14 @@ class QdrantServiceUnitTest {
         assertNotEquals(id, QdrantService.pointIdFor("lecture.pdf", 4));
         assertNotEquals(id, QdrantService.pointIdFor("other.pdf", 3));
     }
+
+    @Test
+    void messagesDoNotPutQuestionTextInLogs() {
+        String question = "my private question about grades";
+
+        assertFalse(new com.northeastern.csye7374.finalproject.messages.SearchQuery(question, 5)
+            .toString().contains("private"));
+        assertFalse(new com.northeastern.csye7374.finalproject.messages.LLMRequest(question, List.of("c"))
+            .toString().contains("private"));
+    }
 }

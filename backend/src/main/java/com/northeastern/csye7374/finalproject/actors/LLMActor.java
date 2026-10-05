@@ -146,15 +146,13 @@ public class LLMActor extends AbstractBehavior<LLMActor.Command> {
     private Behavior<Command> onGenerateAnswer(GenerateAnswer cmd) {
         log.info("---");
         log.info("[LLM-ACTOR] [{}] Received GenerateAnswer", nodeId);
-        log.info("[LLM-ACTOR] Query: \"{}\"", 
-            cmd.query.substring(0, Math.min(50, cmd.query.length())) + "...");
+        log.info("[LLM-ACTOR] Query length: {} chars", cmd.query.length());
         log.info("[LLM-ACTOR] Context chunks: {}", cmd.contextChunks.size());
         
         // Console output
         System.out.println("---");
         System.out.println("[LLM-ACTOR] [" + nodeId + "] Received GenerateAnswer");
-        System.out.println("[LLM-ACTOR] Query: \"" + 
-            cmd.query.substring(0, Math.min(50, cmd.query.length())) + "...\"");
+        System.out.println("[LLM-ACTOR] Query length: " + cmd.query.length() + " chars");
         System.out.println("[LLM-ACTOR] Context chunks: " + cmd.contextChunks.size());
         
         long startTime = System.currentTimeMillis();
@@ -196,7 +194,7 @@ public class LLMActor extends AbstractBehavior<LLMActor.Command> {
                 
                 cmd.loggingActor.tell(new LoggingActor.LogQuery(
                     cmd.query,
-                    answer.substring(0, Math.min(100, answer.length())) + "...",
+                    "(" + answer.length() + " chars)",  // never log the answer text
                     System.currentTimeMillis(),
                     nodeId
                 ));

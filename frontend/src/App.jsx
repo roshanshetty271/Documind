@@ -49,8 +49,9 @@ export default function App() {
       const data = await response.json();
       setMessages(prev => [...prev, { 
         type: 'bot', 
-        content: data.answer,
-        responseTime: data.responseTime
+        content: data.answer || data.error || 'Request failed',
+        responseTime: data.responseTime,
+        isError: !response.ok
       }]);
     } catch {
       setMessages(prev => [...prev, { 

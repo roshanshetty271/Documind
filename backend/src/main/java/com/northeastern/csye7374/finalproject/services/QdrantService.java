@@ -614,7 +614,7 @@ public class QdrantService {
             return results;
         }
         
-        System.out.println("[RERANK] Keywords: " + queryWords);
+        System.out.println("[RERANK] Keywords extracted: " + queryWords.size());
         
         // Score each result by keyword matches
         List<java.util.Map.Entry<SearchResult, Integer>> scored = new ArrayList<>();

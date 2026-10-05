@@ -27,6 +27,8 @@ public final class LLMRequest implements Serializable {
     
     @Override
     public String toString() {
-        return "LLMRequest{query='" + originalQuery + "', contextChunks=" + contextChunks.size() + "}";
+        // Length only, so logging this message never writes the question text
+        return "LLMRequest{queryLength=" + (originalQuery != null ? originalQuery.length() : 0)
+            + ", contextChunks=" + contextChunks.size() + "}";
     }
 }
