@@ -35,7 +35,7 @@ public class FileUploadController {
     private static final String COLLECTION_NAME = "course_documents";
     private static final int WINDOW_SIZE = 5;      // 5 sentences per chunk
     private static final int SLIDE_STEP = 2;       // 60% overlap
-    private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+    static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB (also set in application.properties)
 
     // Constructor
     public FileUploadController() {
